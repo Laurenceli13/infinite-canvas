@@ -4,7 +4,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isGeminiFormat, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -16,27 +16,52 @@ type SeedanceTask = {
     error?: { code?: string; message?: string } | null;
     content?: { video_url?: string; last_frame_url?: string } | null;
 };
+type AgnesVideoPayload = Record<string, unknown>;
 type ApiEnvelope<T> = T | { code?: number; data?: T | null; msg?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; requestId?: string };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "agnes"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
+function isAgnesVideoFormat(config: Pick<AiConfig, "apiFormat">) {
+    return config.apiFormat === "agnes";
+}
+
+function isStudioAgnesProxyConfig(config: Pick<AiConfig, "apiFormat" | "apiKey">) {
+    if (!isAgnesVideoFormat(config)) return false;
+    if (typeof window === "undefined") return false;
+    return window.location.hostname.toLowerCase() === "studio.massmore.org" && !String(config.apiKey || "").trim();
+}
+
+function studioAgnesProxyUrl(path: string) {
+    return `${window.location.origin}/__agnes_skill/v1${path}`;
+}
+
 function aiApiUrl(config: AiConfig, path: string) {
+    if (isStudioAgnesProxyConfig(config)) return studioAgnesProxyUrl(path);
     return buildApiUrl(config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
+    if (isStudioAgnesProxyConfig(config)) {
+        return {
+            ...(contentType ? { "Content-Type": contentType } : {}),
+        };
+    }
     return {
         Authorization: `Bearer ${config.apiKey}`,
         ...(contentType ? { "Content-Type": contentType } : {}),
     };
 }
 
+function requestHeaders(config: AiConfig, options?: RequestOptions, contentType?: string) {
+    return { ...aiHeaders(config, contentType), ...(options?.requestId ? { "X-Studio-Generation-Id": options.requestId } : {}) };
+}
+
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
-    const delayMs = task.provider === "seedance" ? 5000 : 2500;
+    const delayMs = task.provider === "seedance" ? 5000 : task.provider === "agnes" ? 8000 : 2500;
     for (let attempt = 0; attempt < 120; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const state = await pollVideoGenerationTask(config, task, options);
@@ -55,6 +80,10 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
     }
+    if (isAgnesVideoFormat(requestConfig)) {
+        if (videoReferences.length || audioReferences.length) throw new Error("Agnes 视频当前只支持文本或图片参考，请移除参考视频和参考音频后重试");
+        return createAgnesVideoTask(requestConfig, selectedModel, prompt, references, options);
+    }
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
@@ -64,7 +93,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);
-    return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
+    return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : task.provider === "agnes" ? pollAgnesVideoTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
@@ -84,11 +113,39 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => body.append("input_reference[]", file));
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config), signal: options?.signal })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: requestHeaders(config, options), signal: options?.signal })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
         return { id: created.id, provider: "openai", model };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
+    }
+}
+
+async function createAgnesVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    try {
+        const referenceImages = await Promise.all(references.slice(0, 4).map(async (image) => imageToDataUrl(image)));
+        const payload: Record<string, unknown> = {
+            model: modelOptionName(model),
+            prompt,
+            seconds: normalizeVideoSeconds(config.videoSeconds),
+            size: normalizeVideoSize(config.size) || "1280x720",
+            vquality: config.vquality || "720",
+            ...agnesVideoDurationParams(config.videoSeconds),
+        };
+        if (referenceImages.length === 1) {
+            payload.image = referenceImages[0];
+        } else if (referenceImages.length > 1) {
+            payload.extra_body = {
+                image: referenceImages,
+                mode: "keyframes",
+            };
+        }
+        const created = unwrapAgnesPayload((await axios.post<AgnesVideoPayload>(aiApiUrl(config, "/videos"), payload, { headers: requestHeaders(config, options, "application/json"), signal: options?.signal })).data, "Agnes 视频接口没有返回任务");
+        const id = agnesTaskId(created);
+        if (!id) throw new Error("Agnes 视频接口没有返回任务 ID");
+        return { id, provider: "agnes", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Agnes 视频任务创建失败"));
     }
 }
 
@@ -104,6 +161,27 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务查询失败"));
+    }
+}
+
+async function pollAgnesVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    try {
+        const payload = unwrapAgnesPayload((await axios.get<AgnesVideoPayload>(aiApiUrl(config, `/videos/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config), signal: options?.signal })).data, "Agnes 视频任务查询失败");
+        const status = agnesTaskStatus(payload);
+        if (status === "completed" || status === "succeeded" || status === "success") {
+            const url = agnesVideoUrl(payload);
+            if (!url) return { status: "failed", error: "Agnes 视频任务已完成，但没有返回视频地址" };
+            return { status: "completed", result: await videoResultFromUrl(url, options) };
+        }
+        if (status === "failed" || status === "error" || status === "cancelled") {
+            return { status: "failed", error: agnesTaskError(payload) || "Agnes 视频生成失败" };
+        }
+        return { status: "pending" };
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 429) {
+            return { status: "pending" };
+        }
+        throw new Error(readAxiosError(error, "Agnes 视频任务查询失败"));
     }
 }
 
@@ -231,13 +309,20 @@ async function videoResultFromUrl(url: string, options?: RequestOptions): Promis
 function assertVideoConfig(config: AiConfig, model: string) {
     if (!model) throw new Error("请先配置视频模型");
     if (!config.baseUrl.trim()) throw new Error("请先配置 Base URL");
-    if (!config.apiKey.trim()) throw new Error("请先配置 API Key");
-    if (config.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持视频生成，请使用 OpenAI 格式渠道");
+    if (!config.apiKey.trim() && !isStudioAgnesProxyConfig(config)) throw new Error("请先配置 API Key");
+    if (isGeminiFormat(config.apiFormat)) throw new Error("Gemini 调用格式暂不支持视频生成，请使用 OpenAI 格式渠道");
 }
 
 function normalizeVideoSeconds(value: string) {
     const seconds = Math.floor(Number(value) || 6);
-    return String(Math.max(1, Math.min(20, seconds)));
+    return String(Math.max(1, Math.min(18, seconds)));
+}
+
+function agnesVideoDurationParams(value: string) {
+    const seconds = Number(normalizeVideoSeconds(value));
+    const frameRate = 24;
+    const numFrames = Math.min(441, Math.max(81, Math.round(seconds * frameRate) + 1));
+    return { num_frames: numFrames, frame_rate: frameRate };
 }
 
 function normalizeVideoSize(value: string) {
@@ -252,6 +337,69 @@ function normalizeVideoResolution(value: string) {
     if (value === "auto" || value === "high" || value === "medium") return "720p";
     const resolution = value.replace(/p$/i, "") || "720";
     return `${resolution}p`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function unwrapAgnesPayload(payload: AgnesVideoPayload, emptyMessage: string) {
+    const unwrapped = unwrapEnvelope<Record<string, unknown> | Array<Record<string, unknown>>>(payload as ApiEnvelope<Record<string, unknown> | Array<Record<string, unknown>>>, emptyMessage);
+    if (Array.isArray(unwrapped)) {
+        const first = unwrapped.find(isRecord);
+        if (first) return first;
+        throw new Error(emptyMessage);
+    }
+    if (!isRecord(unwrapped)) throw new Error(emptyMessage);
+    return unwrapped;
+}
+
+function agnesCandidateRecords(payload: AgnesVideoPayload) {
+    const candidates: Record<string, unknown>[] = [];
+    if (isRecord(payload)) candidates.push(payload);
+    const data = isRecord(payload) ? payload.data : undefined;
+    if (Array.isArray(data)) {
+        data.filter(isRecord).forEach((item) => candidates.push(item));
+    } else if (isRecord(data)) {
+        candidates.push(data);
+    }
+    return candidates;
+}
+
+function agnesTaskId(payload: AgnesVideoPayload) {
+    for (const candidate of agnesCandidateRecords(payload)) {
+        for (const key of ["task_id", "id", "video_id"]) {
+            const value = candidate[key];
+            if (typeof value === "string" && value.trim()) return value.trim();
+        }
+    }
+    return "";
+}
+
+function agnesTaskStatus(payload: AgnesVideoPayload) {
+    for (const candidate of agnesCandidateRecords(payload)) {
+        const status = candidate.status;
+        if (typeof status === "string" && status.trim()) return status.trim().toLowerCase();
+    }
+    return "";
+}
+
+function agnesTaskError(payload: AgnesVideoPayload) {
+    for (const candidate of agnesCandidateRecords(payload)) {
+        if (typeof candidate.error === "string" && candidate.error.trim()) return candidate.error.trim();
+        if (isRecord(candidate.error) && typeof candidate.error.message === "string" && candidate.error.message.trim()) return candidate.error.message.trim();
+    }
+    return "";
+}
+
+function agnesVideoUrl(payload: AgnesVideoPayload) {
+    for (const candidate of agnesCandidateRecords(payload)) {
+        for (const key of ["video_url", "url"]) {
+            const value = candidate[key];
+            if (typeof value === "string" && /^https?:\/\//i.test(value)) return value;
+        }
+    }
+    return "";
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse) {
@@ -274,12 +422,19 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return "请求已取消";
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
+    if (axios.isAxiosError<{ error?: { message?: string }; message?: string; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
-        return responseData?.msg || responseData?.error?.message || statusMessage(error.response?.status, fallback);
+        return readableGenerationError(responseData?.msg || responseData?.message || responseData?.error?.message || statusMessage(error.response?.status, fallback));
     }
     if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
     return error instanceof Error ? error.message : fallback;
+}
+
+function readableGenerationError(message: string) {
+    const raw = String(message || "");
+    if (/content_policy_violation|content policy|内容安全|性感|挑逗|裸露|性暗示/i.test(raw)) return "内容安全策略拒绝了当前视频：请改为非暴露、非透视、无成人化表达的商品展示后重试。";
+    if (/timed out|timeout|\b524\b/i.test(raw)) return "视频上游超时，请稍后重试。此次失败任务不会扣除积分。";
+    return raw;
 }
 
 function statusMessage(status: number | undefined, fallback: string) {

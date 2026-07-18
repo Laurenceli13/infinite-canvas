@@ -4,8 +4,9 @@ import { App, Button, Image, Tag } from "antd";
 import { useNavigate } from "react-router-dom";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
-import { navigationTools } from "@/constant/navigation-tools";
+import { navigationTools, navigationToolLabel } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
+import { useStudioLocaleStore } from "@/stores/use-studio-locale-store";
 
 function Highlighter({ action, color, children }: { action: "highlight" | "underline"; color: string; children: ReactNode }) {
     return (
@@ -20,19 +21,51 @@ function Highlighter({ action, color, children }: { action: "highlight" | "under
     );
 }
 
-export default function IndexPage() {
+export default function HomePage() {
     const { message } = App.useApp();
     const navigate = useNavigate();
+    const locale = useStudioLocaleStore((state) => state.locale);
     const [primaryTool] = navigationTools;
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
     const [previewIndex, setPreviewIndex] = useState(0);
     const [previewOpen, setPreviewOpen] = useState(false);
 
+    const copy =
+        locale === "zh"
+            ? {
+                  title: "无限画布",
+                  introA: "在",
+                  introB: "无限画布",
+                  introC: "中生成、连接和重组",
+                  introD: "图片、文字与图形",
+                  introE: "，让创作从单次生成变成连续推演。",
+                  start: "开始使用",
+                  openCanvas: "打开画布",
+                  showcaseTitle: "沉淀每一次好结果",
+                  showcaseSubtitle: "收藏稳定出图的提示词、参考风格和结果图片，让下一次创作从已有经验开始。",
+                  promptLibrary: "查看提示词库",
+                  loadError: "获取提示词失败",
+              }
+            : {
+                  title: "Infinite Canvas",
+                  introA: "Generate, connect, and reshape",
+                  introB: "visual ideas",
+                  introC: "across the",
+                  introD: "infinite canvas",
+                  introE: "so creation becomes an evolving workflow instead of a single prompt.",
+                  start: "Get Started",
+                  openCanvas: "Open Canvas",
+                  showcaseTitle: "Keep Every Strong Result",
+                  showcaseSubtitle: "Save proven prompts, visual references, and results so the next round starts with momentum.",
+                  promptLibrary: "Open Prompt Library",
+                  loadError: "Failed to load prompts",
+              };
+
     useEffect(() => {
         void fetchPrompts({ pageSize: 12 })
             .then((data) => setPromptShowcase(data.items))
-            .catch((error) => message.error(error instanceof Error ? error.message : "获取提示词失败"));
-    }, [message]);
+            .catch((error) => message.error(error instanceof Error ? error.message : copy.loadError));
+    }, [copy.loadError, message]);
 
     return (
         <main className="relative h-full overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] text-stone-950 dark:bg-[radial-gradient(rgba(245,245,244,.18)_1px,transparent_1px)] dark:text-stone-100">
@@ -41,24 +74,42 @@ export default function IndexPage() {
                 <div className="pointer-events-none absolute right-[23%] top-[48%] size-20 rounded-full border border-dashed border-stone-200 dark:border-stone-800" />
 
                 <div className="relative flex min-h-[620px] flex-col items-center justify-center pt-10 text-center">
-                    <h1 className="ai-title-aurora max-w-5xl text-balance text-5xl font-semibold tracking-normal sm:text-7xl lg:text-8xl">无限画布</h1>
+                    <h1 className="ai-title-aurora max-w-5xl text-balance text-5xl font-semibold tracking-normal sm:text-7xl lg:text-8xl">{copy.title}</h1>
                     <p className="mt-8 max-w-3xl text-balance text-lg leading-8 text-stone-500 dark:text-stone-400">
-                        在
-                        <Highlighter action="underline" color="#FF9800">
-                            无限画布
-                        </Highlighter>
-                        中生成、连接和重组
-                        <Highlighter action="highlight" color="#87CEFA">
-                            图片、文字与图形
-                        </Highlighter>
-                        ，让创作从单次生成变成连续推演。
+                        {locale === "zh" ? (
+                            <>
+                                {copy.introA}
+                                <Highlighter action="underline" color="#FF9800">
+                                    {copy.introB}
+                                </Highlighter>
+                                {copy.introC}
+                                <Highlighter action="highlight" color="#87CEFA">
+                                    {copy.introD}
+                                </Highlighter>
+                                {copy.introE}
+                            </>
+                        ) : (
+                            <>
+                                {copy.introA}
+                                <Highlighter action="highlight" color="#87CEFA">
+                                    {" "}
+                                    {copy.introB}{" "}
+                                </Highlighter>
+                                {copy.introC}
+                                <Highlighter action="underline" color="#FF9800">
+                                    {" "}
+                                    {copy.introD}{" "}
+                                </Highlighter>
+                                {copy.introE}
+                            </>
+                        )}
                     </p>
                     <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
                         <Button type="primary" size="large" onClick={() => navigate(`/${primaryTool.slug}`)} icon={<ArrowRight className="size-4" />} iconPlacement="end">
-                            开始使用
+                            {copy.start}
                         </Button>
                         <Button size="large" onClick={() => navigate("/canvas")}>
-                            打开画布
+                            {copy.openCanvas}
                         </Button>
                     </div>
                 </div>
@@ -67,11 +118,11 @@ export default function IndexPage() {
                     <div className="mb-8 grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
                         <div />
                         <div className="max-w-2xl text-center">
-                            <h2 className="text-3xl font-semibold text-stone-950 dark:text-stone-100">沉淀每一次好结果</h2>
-                            <p className="mt-3 text-base leading-7 text-stone-500 dark:text-stone-400">收藏稳定出图的提示词、参考风格和结果图片，让下一次创作从已有经验开始。</p>
+                            <h2 className="text-3xl font-semibold text-stone-950 dark:text-stone-100">{copy.showcaseTitle}</h2>
+                            <p className="mt-3 text-base leading-7 text-stone-500 dark:text-stone-400">{copy.showcaseSubtitle}</p>
                         </div>
                         <Button type="link" onClick={() => navigate("/prompts")} className="justify-self-center md:justify-self-end" icon={<ArrowRight className="size-4" />} iconPlacement="end">
-                            查看提示词库
+                            {copy.promptLibrary}
                         </Button>
                     </div>
                     <div className="grid auto-rows-[210px] gap-4 md:grid-cols-4">
@@ -103,6 +154,9 @@ export default function IndexPage() {
                                 </div>
                             </button>
                         ))}
+                    </div>
+                    <div className="mt-8 flex justify-center text-sm text-stone-500 dark:text-stone-400">
+                        {locale === "zh" ? `当前主入口：${navigationToolLabel(primaryTool.slug, locale)}` : `Primary workspace: ${navigationToolLabel(primaryTool.slug, locale)}`}
                     </div>
                 </section>
             </section>

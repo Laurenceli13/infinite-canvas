@@ -19,6 +19,7 @@ import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { AgentChatComposer, AgentChatMessage, AgentModeSwitch, AgentPanelTabs, AgentWorkingMessage, type CanvasAgentChatMessage, type CanvasAgentMode } from "./canvas-agent-chat-ui";
 import { CanvasLocalAgentPanel } from "./canvas-local-agent-panel";
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
+import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { CanvasNodeType, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "@/types/canvas";
 import { useCanvasAgentStore } from "@/stores/canvas/use-canvas-agent-store";
 import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
@@ -672,27 +673,46 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
 function AgentTextModelPicker({ config, value, onChange }: { config: AiConfig; value: string; onChange: (model: string) => void }) {
     const options = useMemo(() => Array.from(new Set([value, ...selectableModelsByCapability(config, "text")].filter(Boolean))), [config, value]);
     const current = value || "";
+    const creditCost = (model: string) =>
+        requestCreditCost({
+            channelMode: config.channelMode,
+            modelCosts: config.modelCosts,
+            modelPricingRules: config.modelPricingRules,
+            model,
+            capability: "text",
+        });
+    const currentCost = current ? creditCost(current) : 0;
     return (
         <Select value={current} onValueChange={onChange}>
             <SelectTrigger
                 hideChevron
-                className="h-7 min-w-0 max-w-[220px] gap-1.5 border-0 bg-transparent px-1 py-0 text-xs font-normal shadow-none hover:bg-transparent hover:opacity-75 focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:ring-0 dark:bg-transparent dark:hover:bg-transparent"
-                title={current ? `${modelOptionName(current)} · ${resolveModelChannel(config, current).name}` : "选择文本模型"}
+                className="h-7 min-w-0 max-w-[260px] gap-1.5 border-0 bg-transparent px-1 py-0 text-xs font-normal shadow-none hover:bg-transparent hover:opacity-75 focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:ring-0 dark:bg-transparent dark:hover:bg-transparent"
+                title={current ? `${modelOptionName(current)} · ${resolveModelChannel(config, current).name} · ${currentCost.toFixed(2)} 积分/次` : "选择文本模型"}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
             >
                 <AgentModelIcon model={current} />
                 <span className="min-w-0 truncate">{current ? modelOptionName(current) : "选择文本模型"}</span>
                 {current ? <span className="shrink-0 opacity-55">{resolveModelChannel(config, current).name}</span> : null}
+                {current ? (
+                    <span className="inline-flex shrink-0 items-center gap-0.5 font-medium tabular-nums text-amber-600 dark:text-amber-300">
+                        <CreditSymbol className="text-[10px]" />
+                        {currentCost.toFixed(2)}
+                    </span>
+                ) : null}
             </SelectTrigger>
             <SelectContent data-canvas-no-zoom className="z-[1200] w-72 max-w-[calc(100vw-24px)]" position="popper" align="start" side="bottom" sideOffset={6} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
                 {options.length ? (
                     options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={`${modelOptionName(model)} ${resolveModelChannel(config, model).name}`}>
+                        <SelectItem key={model} value={model} textValue={`${modelOptionName(model)} ${resolveModelChannel(config, model).name} ${creditCost(model).toFixed(2)} 积分/次`}>
                             <span className="flex min-w-0 items-center gap-2">
                                 <AgentModelIcon model={model} />
                                 <span className="min-w-0 flex-1 truncate">{modelOptionName(model)}</span>
                                 <span className="shrink-0 text-xs opacity-55">{resolveModelChannel(config, model).name}</span>
+                                <span className="inline-flex shrink-0 items-center gap-0.5 text-xs font-medium tabular-nums text-amber-600 dark:text-amber-300">
+                                    <CreditSymbol className="text-[10px]" />
+                                    {creditCost(model).toFixed(2)}
+                                </span>
                             </span>
                         </SelectItem>
                     ))

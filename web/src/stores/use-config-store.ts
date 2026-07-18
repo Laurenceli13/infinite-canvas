@@ -2,8 +2,24 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
+import type { StudioPricingRules } from "@/lib/studio-pricing";
 
-export type ApiCallFormat = "openai" | "gemini";
+export type ApiCallFormat =
+    | "openai"
+    | "gemini"
+    | "agnes"
+    | "grok"
+    | "seedance"
+    | "mimo"
+    | "minimax"
+    | "midjourney"
+    | "omni"
+    | "veo"
+    | "sora"
+    | "kling"
+    | "imagen"
+    | "happyhors";
+export type ApiProtocol = "openai" | "gemini";
 
 export type ModelChannel = {
     id: string;
@@ -35,6 +51,8 @@ export type AiConfig = {
     videoWatermark: string;
     systemPrompt: string;
     models: string[];
+    modelCosts: Array<{ model: string; credits: number }>;
+    modelPricingRules: Array<{ model: string; rules: StudioPricingRules }>;
     imageModels: string[];
     videoModels: string[];
     textModels: string[];
@@ -56,8 +74,30 @@ export type WebdavSyncConfig = {
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 const CHANNEL_MODEL_SEPARATOR = "::";
-const OPENAI_BASE_URL = "https://api.openai.com";
-const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+
+export const API_FORMAT_OPTIONS: Array<{ label: string; value: ApiCallFormat }> = [
+    { label: "OpenAI", value: "openai" },
+    { label: "Gemini", value: "gemini" },
+    { label: "Agnes", value: "agnes" },
+    { label: "Grok", value: "grok" },
+    { label: "Seedance", value: "seedance" },
+    { label: "Mimo", value: "mimo" },
+    { label: "MiniMax", value: "minimax" },
+    { label: "Midjourney", value: "midjourney" },
+    { label: "Omni", value: "omni" },
+    { label: "Veo", value: "veo" },
+    { label: "Sora", value: "sora" },
+    { label: "Kling", value: "kling" },
+    { label: "Imagen", value: "imagen" },
+    { label: "HappyHors", value: "happyhors" },
+];
+
+export const CONTROLLED_BASE_URL_OPTIONS = [
+    { label: "MassMore / Sub2API", value: "https://massmore.org" },
+    { label: "Mtline / New API", value: "https://mtline.cc" },
+] as const;
+
+const OPENAI_BASE_URL = CONTROLLED_BASE_URL_OPTIONS[0].value;
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -89,6 +129,8 @@ export const defaultConfig: AiConfig = {
     videoWatermark: "false",
     systemPrompt: "",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    modelCosts: [],
+    modelPricingRules: [],
     imageModels: ["default::gpt-image-2"],
     videoModels: ["default::grok-imagine-video"],
     textModels: ["default::gpt-5.5"],
@@ -160,9 +202,19 @@ function modelListKey(capability: ModelCapability) {
     return `${capability}Models` as "imageModels" | "videoModels" | "textModels" | "audioModels";
 }
 
+function isStudioAgnesManagedModel(channel: ModelChannel, model: string) {
+    if (channel.apiFormat !== "agnes") return false;
+    if (typeof window === "undefined") return false;
+    if (window.location.hostname.toLowerCase() !== "studio.massmore.org") return false;
+    return isImageModelName(model) || isVideoModelName(model);
+}
+
 function isAiConfigReady(config: AiConfig, model: string) {
+    if (isStudioManagedRuntime()) return Boolean(model.trim());
     const channel = resolveModelChannel(config, model);
-    return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
+    if (!model.trim() || !channel.baseUrl.trim()) return false;
+    if (isStudioAgnesManagedModel(channel, model)) return true;
+    return Boolean(channel.apiKey.trim());
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -211,6 +263,8 @@ export const useConfigStore = create<ConfigStore>()(
                         apiFormat: normalizeApiFormat(config.apiFormat),
                         channels,
                         models,
+                        modelCosts: Array.isArray(config.modelCosts) ? config.modelCosts : [],
+                        modelPricingRules: Array.isArray(config.modelPricingRules) ? config.modelPricingRules : [],
                         imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
                         videoModel: normalizeModelOptionValue(config.videoModel || "grok-imagine-video", channels),
                         textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
@@ -252,7 +306,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
     return {
         id: channel?.id?.trim() || nanoid(),
         name: channel?.name?.trim() || "新渠道",
-        baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
+        baseUrl: normalizeControlledBaseUrl(channel?.baseUrl ?? defaultBaseUrlForApiFormat(apiFormat)),
         apiKey: channel?.apiKey || "",
         apiFormat,
         models: uniqueRawModels(channel?.models || []),
@@ -350,12 +404,31 @@ function normalizeChannels(config: AiConfig) {
     return channels.map((channel) => ({ ...channel, models: uniqueRawModels(channel.models) }));
 }
 
-export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
-    return apiFormat === "gemini" ? GEMINI_BASE_URL : OPENAI_BASE_URL;
+export function defaultBaseUrlForApiFormat(_apiFormat: ApiCallFormat) {
+    return OPENAI_BASE_URL;
+}
+
+export function apiProtocolForFormat(_apiFormat: ApiCallFormat): ApiProtocol {
+    return "openai";
+}
+
+export function isGeminiFormat(_apiFormat: ApiCallFormat) {
+    return false;
+}
+
+export function apiFormatLabel(apiFormat: ApiCallFormat) {
+    return API_FORMAT_OPTIONS.find((option) => option.value === apiFormat)?.label || "OpenAI";
 }
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
-    return apiFormat === "gemini" ? "gemini" : "openai";
+    const value = String(apiFormat || "").trim().toLowerCase();
+    return API_FORMAT_OPTIONS.some((option) => option.value === value) ? (value as ApiCallFormat) : "openai";
+}
+
+export function normalizeControlledBaseUrl(baseUrl: unknown) {
+    const value = stripControlledApiSuffix(String(baseUrl || "").trim().replace(/\/+$/, ""));
+    const matched = CONTROLLED_BASE_URL_OPTIONS.find((option) => option.value.replace(/\/+$/, "") === value);
+    return matched?.value || OPENAI_BASE_URL;
 }
 
 function uniqueRawModels(models: string[]) {
@@ -367,11 +440,40 @@ function uniqueModelOptions(models: string[]) {
 }
 
 export function buildApiUrl(baseUrl: string, path: string) {
-    let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+    if (isStudioManagedRuntime()) return `${window.location.origin}/studio-api/v1${path}`;
+    let normalizedBaseUrl = normalizeControlledBaseUrl(baseUrl).trim().replace(/\/+$/, "");
     normalizedBaseUrl = normalizeArkPlanBaseUrl(normalizedBaseUrl);
+    const studioProxyBase = resolveStudioProxyBase(normalizedBaseUrl);
+    if (studioProxyBase) {
+        return `${studioProxyBase}${path}`;
+    }
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
     const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
+}
+
+function stripControlledApiSuffix(baseUrl: string) {
+    const lowerBaseUrl = baseUrl.toLowerCase();
+    if (lowerBaseUrl === "https://massmore.org/v1") return "https://massmore.org";
+    if (lowerBaseUrl === "https://mtline.cc/v1") return "https://mtline.cc";
+    return baseUrl;
+}
+
+function resolveStudioProxyBase(baseUrl: string) {
+    if (typeof window === "undefined") return "";
+    const hostname = window.location.hostname.toLowerCase();
+    const normalizedBaseUrl = baseUrl.toLowerCase();
+    if (hostname === "studio.massmore.org") {
+        return `${window.location.origin}/studio-api/v1`;
+    }
+    if (hostname === "studio.massmore.org" && normalizedBaseUrl === "https://massmore.org") {
+        return `${window.location.origin}/__massmore_v1`;
+    }
+    return "";
+}
+
+function isStudioManagedRuntime() {
+    return typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
 }
 
 function normalizeArkPlanBaseUrl(baseUrl: string) {

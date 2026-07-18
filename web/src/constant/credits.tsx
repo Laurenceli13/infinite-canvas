@@ -1,5 +1,7 @@
 import type { ComponentProps } from "react";
 import { Zap } from "lucide-react";
+import { type ModelCapability } from "@/stores/use-config-store";
+import { pricingRuleUnitCost, type StudioPricingRules } from "@/lib/studio-pricing";
 
 export function CreditSymbol({ className, ...props }: ComponentProps<"span">) {
     return (
@@ -14,12 +16,17 @@ export type ModelCreditCost = {
     credits: number;
 };
 
-function modelCreditCost(modelCosts: ModelCreditCost[] | undefined, model: string) {
-    return modelCosts?.find((item) => item.model === model)?.credits || 0;
+export function requestCreditUnits(options: { capability: ModelCapability; count?: string | number; seconds?: string | number }) {
+    if (options.capability === "image") return Math.max(1, Math.floor(Math.abs(Number(options.count)) || 1));
+    if (options.capability === "video") return Math.max(1, Math.ceil(Math.abs(Number(options.seconds)) || 1));
+    return 1;
 }
 
-export function requestCreditCost(options: { channelMode: string; modelCosts?: ModelCreditCost[]; model: string; count?: string | number }) {
-    if (options.channelMode !== "remote") return 0;
-    const count = Math.max(1, Math.floor(Math.abs(Number(options.count)) || 1));
-    return modelCreditCost(options.modelCosts, options.model) * count;
+export function requestCreditCost(options: { channelMode: string; modelCosts?: ModelCreditCost[]; modelPricingRules?: Array<{ model: string; rules: StudioPricingRules }>; model: string; capability?: ModelCapability; count?: string | number; seconds?: string | number; quality?: string; size?: string; vquality?: string }) {
+    const isStudioManaged = typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
+    if (options.channelMode !== "remote" && !isStudioManaged) return 0;
+    const capability = options.capability || "image";
+    const units = requestCreditUnits({ capability, count: options.count, seconds: options.seconds });
+    const unitCost = pricingRuleUnitCost({ modelCosts: options.modelCosts, modelPricingRules: options.modelPricingRules, model: options.model, capability, quality: options.quality, size: options.size, vquality: options.vquality });
+    return unitCost * units;
 }

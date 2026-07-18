@@ -4,11 +4,14 @@ import { Switch } from "antd";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
+import { enabledVideoResolutions, modelPricingRules, normalizedVideoResolution } from "@/lib/studio-pricing";
 import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
 
 const resolutionOptions = [
     { value: "720", label: "720p" },
     { value: "480", label: "480p" },
+    { value: "1080", label: "1080p" },
+    { value: "4k", label: "4K" },
 ];
 
 const sizeOptions = [
@@ -20,7 +23,7 @@ const sizeOptions = [
     { value: "auto", label: "auto", width: 0, height: 0 },
 ];
 
-const secondOptions = [6, 10, 12, 16, 20];
+const secondOptions = [3, 5, 10, 18];
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
@@ -39,6 +42,8 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
     const resolution = normalizeVideoResolutionValue(config.vquality);
+    const rules = modelPricingRules(config.modelPricingRules, config.model);
+    const enabledResolutions = enabledVideoResolutions(rules);
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 720));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
@@ -49,13 +54,12 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">视频设置</div> : null}
                 <SettingGroup title="清晰度" color={theme.node.muted}>
-                    <div className="grid grid-cols-3 gap-2.5">
-                        {resolutionOptions.map((item) => (
+                    <div className="grid grid-cols-4 gap-2.5">
+                        {resolutionOptions.filter((item) => enabledResolutions.includes(normalizedVideoResolution(item.value))).map((item) => (
                             <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
                                 {item.label}
                             </OptionPill>
                         ))}
-                        <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} />
                     </div>
                 </SettingGroup>
                 <SettingGroup title="尺寸" color={theme.node.muted}>
@@ -92,7 +96,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 {value}s
                             </OptionPill>
                         ))}
-                        <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                        <NumberInput value={seconds} min={1} max={18} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                     </div>
                 </SettingGroup>
             </div>
@@ -209,17 +213,6 @@ function SettingGroup({ title, color, children }: { title: string; color: string
             </div>
             {children}
         </div>
-    );
-}
-
-function ResolutionInput({ value, theme, onChange }: { value: string; theme: CanvasTheme; onChange: (value: string) => void }) {
-    return (
-        <label className="flex h-9 overflow-hidden rounded-full border text-sm" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
-            <input type="number" min={1} className="min-w-0 flex-1 bg-transparent px-3 text-center outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" value={value} onChange={(event) => onChange(event.target.value)} onMouseDown={(event) => event.stopPropagation()} />
-            <span className="grid w-7 place-items-center pr-1" style={{ color: theme.node.muted }}>
-                p
-            </span>
-        </label>
     );
 }
 

@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react";
 import { ConfigProvider, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
+import { modelPricingRules, enabledImageQualities, enabledImageSizeTiers, imageSizeTier } from "@/lib/studio-pricing";
 import type { AiConfig } from "@/stores/use-config-store";
 
 const qualityOptions = [
@@ -41,6 +42,9 @@ type ImageSettingsPanelProps = {
 export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
     const quality = config.quality || "auto";
+    const rules = modelPricingRules(config.modelPricingRules, config.model);
+    const enabledQualities = enabledImageQualities(rules);
+    const enabledSizeTiers = enabledImageSizeTiers(rules);
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
@@ -71,7 +75,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>质量</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {qualityOptions.map((item) => (
+                        {qualityOptions.filter((item) => enabledQualities.includes(item.value)).map((item) => (
                             <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {item.label}
                             </OptionPill>
@@ -99,7 +103,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>宽高比</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {aspectOptions.map((item) => (
+                        {aspectOptions.filter((item) => item.value === "auto" || enabledSizeTiers.includes(imageSizeTier(item.size || item.value))).map((item) => (
                             <button
                                 key={item.value}
                                 type="button"

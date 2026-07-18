@@ -5,9 +5,10 @@ import { useState } from "react";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchChannelModels } from "@/services/api/image";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { createModelChannel, defaultBaseUrlForApiFormat, filterModelsByCapability, modelOptionLabel, modelOptionsFromChannels, normalizeModelOptionValue, useConfigStore, type AiConfig, type ApiCallFormat, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { API_FORMAT_OPTIONS, CONTROLLED_BASE_URL_OPTIONS, apiFormatLabel, createModelChannel, defaultBaseUrlForApiFormat, filterModelsByCapability, modelOptionLabel, modelOptionsFromChannels, normalizeControlledBaseUrl, normalizeModelOptionValue, useConfigStore, type AiConfig, type ApiCallFormat, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -32,10 +33,7 @@ const modelGroups: ModelGroup[] = [
     { capability: "audio", modelKey: "audioModel", modelsKey: "audioModels", defaultLabel: "默认音频模型", optionsLabel: "音频模型可选项" },
 ];
 
-const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
-    { label: "OpenAI", value: "openai" },
-    { label: "Gemini", value: "gemini" },
-];
+const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = API_FORMAT_OPTIONS;
 
 const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
 const webdavDomainLabels: Record<AppSyncDomainKey, string> = {
@@ -57,7 +55,7 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
 
 export function AppConfigModal() {
     const { message } = App.useApp();
-    const [activeTab, setActiveTab] = useState("channels");
+    const [activeTab, setActiveTab] = useState(isStudioManagedHost() ? "models" : "channels");
     const [loadingChannelId, setLoadingChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
     const [syncingWebdav, setSyncingWebdav] = useState(false);
@@ -71,6 +69,7 @@ export function AppConfigModal() {
     const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
+    const managedMode = isStudioManagedHost();
     const modelOptions = config.models.map((model) => ({ label: modelOptionLabel(config, model), value: model }));
     const webdavReady = Boolean(webdav.url.trim());
 
@@ -79,7 +78,7 @@ export function AppConfigModal() {
     };
 
     const finishConfig = () => {
-        const ready = config.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length);
+        const ready = managedMode || config.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length);
         setConfigDialogOpen(false);
         if (!ready) return;
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
@@ -96,8 +95,8 @@ export function AppConfigModal() {
     };
 
     const updateChannelApiFormat = (channel: ModelChannel, apiFormat: ApiCallFormat) => {
-        const baseUrl = !channel.baseUrl.trim() || channel.baseUrl.trim() === defaultBaseUrlForApiFormat(channel.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : channel.baseUrl;
-        updateChannel(channel.id, { apiFormat, baseUrl });
+        const baseUrl = !channel.baseUrl.trim() || channel.baseUrl.trim() === defaultBaseUrlForApiFormat(channel.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : normalizeControlledBaseUrl(channel.baseUrl);
+        updateChannel(channel.id, { apiFormat, baseUrl, models: [] });
     };
 
     const addChannel = () => {
@@ -228,7 +227,8 @@ export function AppConfigModal() {
                 activeKey={activeTab}
                 onChange={setActiveTab}
                 items={[
-                    {
+                    !managedMode
+                        ? {
                         key: "channels",
                         label: "渠道",
                         children: (
@@ -278,7 +278,7 @@ export function AppConfigModal() {
                                                     <Select value={channel.apiFormat} options={apiFormatOptions} onChange={(value: ApiCallFormat) => updateChannelApiFormat(channel, value)} />
                                                 </Form.Item>
                                                 <Form.Item label="Base URL" className="mb-0">
-                                                    <Input value={channel.baseUrl} onChange={(event) => updateChannel(channel.id, { baseUrl: event.target.value })} />
+                                                    <Select value={normalizeControlledBaseUrl(channel.baseUrl)} options={[...CONTROLLED_BASE_URL_OPTIONS]} onChange={(baseUrl) => updateChannel(channel.id, { baseUrl })} />
                                                 </Form.Item>
                                                 <Form.Item label="API Key" className="mb-0">
                                                     <Input.Password value={channel.apiKey} onChange={(event) => updateChannel(channel.id, { apiKey: event.target.value })} />
@@ -292,7 +292,8 @@ export function AppConfigModal() {
                                 </div>
                             </Form>
                         ),
-                    },
+                    }
+                        : null,
                     {
                         key: "models",
                         label: "模型",
@@ -415,7 +416,7 @@ export function AppConfigModal() {
                             </Form>
                         ),
                     },
-                ]}
+                ].filter((item): item is NonNullable<typeof item> => Boolean(item))}
             />
         </Modal>
     );
@@ -453,7 +454,7 @@ function keepOrSuggest(current: string[], suggested: string[], allModels: string
 
 function normalizeDefaultModel(value: string, options: string[]) {
     if (options.includes(value)) return value;
-    return options[0] || value;
+    return options[0] || "";
 }
 
 function normalizeImageCount(value: string) {
@@ -462,10 +463,6 @@ function normalizeImageCount(value: string) {
 
 function uniqueModels(models: string[]) {
     return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)));
-}
-
-function apiFormatLabel(apiFormat: ApiCallFormat) {
-    return apiFormat === "gemini" ? "Gemini" : "OpenAI";
 }
 
 function formatWebdavTime(value: string) {

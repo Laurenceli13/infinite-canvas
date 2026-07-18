@@ -12,9 +12,47 @@ import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
+import { useStudioLocaleStore } from "@/stores/use-studio-locale-store";
+
+const copy = {
+    zh: {
+        importSuccess: (count: number) => `已导入 ${count} 个画布`,
+        importError: "导入失败，请选择有效的画布压缩包",
+        opening: "正在打开画布...",
+        library: "画布库",
+        title: "无限画布",
+        exportCanvas: "导出画布",
+        exportSelected: "导出选中",
+        deleteSelected: "删除选中",
+        deleteAll: "删除全部",
+        importCanvas: "导入画布",
+        newCanvas: "新建画布",
+        loading: "正在加载画布...",
+        emptyTitle: "还没有画布",
+        emptyDesc: "新建一个画布后，就可以独立保存节点、连线和画布外观。",
+    },
+    en: {
+        importSuccess: (count: number) => `Imported ${count} canvases`,
+        importError: "Import failed. Please choose a valid canvas package.",
+        opening: "Opening canvas...",
+        library: "Canvas Library",
+        title: "Infinite Canvas",
+        exportCanvas: "Export Canvas",
+        exportSelected: "Export Selected",
+        deleteSelected: "Delete Selected",
+        deleteAll: "Delete All",
+        importCanvas: "Import Canvas",
+        newCanvas: "New Canvas",
+        loading: "Loading canvases...",
+        emptyTitle: "No canvases yet",
+        emptyDesc: "Create a canvas to save nodes, connections, and its full working layout.",
+    },
+};
 
 export default function CanvasPage() {
     const { message } = App.useApp();
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = copy[locale];
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const inputRef = useRef<HTMLInputElement>(null);
@@ -29,10 +67,14 @@ export default function CanvasPage() {
     const mode = searchParams.get("mode");
     const agentMode = mode === "new" || mode === "recent" || mode === "choose";
     const agentQuery = agentMode ? `?${searchParams.toString()}` : "";
+    const nextProjectTitle = `${text.title} ${projects.length + 1}`;
+
     const enterProject = (id: string) => {
         navigate(`/canvas/${id}${agentQuery}`);
     };
-    const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
+
+    const createAndEnter = () => enterProject(createProject(nextProjectTitle));
+
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -51,9 +93,9 @@ export default function CanvasPage() {
                 ),
             );
             data.projects.forEach((item) => importProject(item.project));
-            message.success(`已导入 ${data.projects.length} 个画布`);
+            message.success(text.importSuccess(data.projects.length));
         } catch {
-            message.error("导入失败，请选择有效的画布压缩包");
+            message.error(text.importError);
         } finally {
             if (inputRef.current) inputRef.current.value = "";
         }
@@ -62,46 +104,53 @@ export default function CanvasPage() {
     useEffect(() => {
         if (!hydrated || autoOpenRef.current || (mode !== "new" && mode !== "recent")) return;
         autoOpenRef.current = true;
-        enterProject(mode === "new" ? createProject(`无限画布 ${projects.length + 1}`) : projects[0]?.id || createProject(`无限画布 ${projects.length + 1}`));
-    }, [createProject, hydrated, mode, projects]);
+        enterProject(mode === "new" ? createProject(nextProjectTitle) : projects[0]?.id || createProject(nextProjectTitle));
+    }, [createProject, hydrated, mode, nextProjectTitle, projects]);
 
-    if (hydrated && (mode === "new" || mode === "recent")) return <main className="flex h-full items-center justify-center bg-background text-sm text-stone-500">正在打开画布...</main>;
+    if (hydrated && (mode === "new" || mode === "recent")) {
+        return <main className="flex h-full items-center justify-center bg-background text-sm text-stone-500">{text.opening}</main>;
+    }
 
     return (
         <main className="h-full overflow-auto bg-background text-stone-950 dark:text-stone-100">
             <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10">
                 <header className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200 pb-6 dark:border-stone-800">
                     <div>
-                        <p className="text-xs text-stone-500">画布库</p>
-                        <h1 className="mt-3 text-3xl font-semibold">无限画布</h1>
+                        <p className="text-xs text-stone-500">{text.library}</p>
+                        <h1 className="mt-3 text-3xl font-semibold">{text.title}</h1>
                     </div>
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
                             <>
-                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `无限画布-${selectedIds.length}个项目`)}>
-                                    导出选中
+                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `${text.title}-${selectedIds.length}`)}>
+                                    {text.exportSelected}
                                 </Button>
                                 <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
-                                    删除选中
+                                    {text.deleteSelected}
                                 </Button>
                             </>
                         ) : null}
                         {projects.length ? (
                             <Button disabled={!hydrated} onClick={() => setDeleteIds(projects.map((project) => project.id))}>
-                                删除全部
+                                {text.deleteAll}
+                            </Button>
+                        ) : null}
+                        {projects.length && !selectedIds.length ? (
+                            <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects, `${text.title}-${projects.length}`)}>
+                                {text.exportCanvas}
                             </Button>
                         ) : null}
                         <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
-                            导入画布
+                            {text.importCanvas}
                         </Button>
                         <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
-                            新建画布
+                            {text.newCanvas}
                         </Button>
                     </div>
                 </header>
 
                 {!hydrated ? (
-                    <section className="flex min-h-[360px] items-center justify-center border-y border-stone-200 text-sm text-stone-500 dark:border-stone-800">正在加载画布...</section>
+                    <section className="flex min-h-[360px] items-center justify-center border-y border-stone-200 text-sm text-stone-500 dark:border-stone-800">{text.loading}</section>
                 ) : projects.length ? (
                     <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
                         {projects.map((project) => (
@@ -110,10 +159,10 @@ export default function CanvasPage() {
                     </div>
                 ) : (
                     <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-stone-200 text-center dark:border-stone-800">
-                        <h2 className="text-xl font-medium">还没有画布</h2>
-                        <p className="mt-3 text-sm text-stone-500">新建一个画布后，就可以独立保存节点、连线和画布外观。</p>
+                        <h2 className="text-xl font-medium">{text.emptyTitle}</h2>
+                        <p className="mt-3 text-sm text-stone-500">{text.emptyDesc}</p>
                         <Button type="primary" className="mt-6" icon={<Plus className="size-4" />} onClick={createAndEnter}>
-                            新建画布
+                            {text.newCanvas}
                         </Button>
                     </section>
                 )}

@@ -17,6 +17,7 @@ import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useStudioLocaleStore, type StudioLocale } from "@/stores/use-studio-locale-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -67,8 +68,123 @@ type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => 
 const LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 
+const videoCopy = {
+    zh: {
+        unsupported: "已忽略不支持的参考素材，请使用图片、mp4/mov 视频或 mp3/wav 音频",
+        overImage: "已忽略超过 30MB 的参考图",
+        overVideo: "已忽略超过 50MB 的参考视频",
+        overAudio: "已忽略超过 15MB 的参考音频",
+        clipboardEmpty: "剪切板里没有可读取的图片",
+        clipboardRead: (count: number) => `已读取 ${count} 张参考图`,
+        promptRequired: "请输入视频提示词",
+        finishConfig: "请先完成配置",
+        addedToAssets: "已加入我的素材",
+        generated: "视频已生成",
+        generationFailed: "生成失败",
+        timeout: "视频生成超时，请稍后重试",
+        title: "视频创作台",
+        history: "记录",
+        params: "参数",
+        prompt: "提示词",
+        promptLibrary: "查看提示词库",
+        myAssets: "查看我的素材",
+        promptPlaceholder: "描述镜头运动、主体动作、场景氛围和画面风格",
+        references: "参考图",
+        referenceVideos: "参考视频",
+        referenceAudio: "参考音频",
+        paste: "剪切板",
+        upload: "上传",
+        removeImage: "移除参考图",
+        removeVideo: "移除参考视频",
+        removeAudio: "移除参考音频",
+        noReferences: "暂无参考图，最多 9 张",
+        noReferenceVideos: "暂无参考视频，最多 3 个",
+        noReferenceAudio: "暂无参考音频，最多 3 个，mp3/wav，单个 15MB 内",
+        adjust: "调整",
+        generate: "开始生成",
+        results: "生成结果",
+        waiting: "等待",
+        noResults: "还没有生成视频",
+        logs: "生成记录",
+        deleteLogs: "删除生成记录",
+        deleteLogsConfirm: (count: number) => `确定删除选中的 ${count} 条生成记录吗？`,
+        model: "模型",
+        saveToAssets: "添加到素材",
+        download: "下载",
+        pending: "生成中",
+        failed: "生成失败",
+        retry: "重试",
+        create: "新建",
+        unselect: "取消",
+        selectAll: "全选",
+        delete: "删除",
+        noLogs: "暂无生成记录",
+        created: "生成中",
+        success: "成功",
+        cancel: "取消",
+        audioRule: "已忽略不符合时长要求的参考音频：单个 2-15 秒，总时长不超过 15 秒",
+    },
+    en: {
+        unsupported: "Unsupported references were ignored. Use images, mp4/mov videos, or mp3/wav audio.",
+        overImage: "Ignored reference images larger than 30MB",
+        overVideo: "Ignored reference videos larger than 50MB",
+        overAudio: "Ignored reference audio files larger than 15MB",
+        clipboardEmpty: "No readable image found in the clipboard",
+        clipboardRead: (count: number) => `Loaded ${count} reference images`,
+        promptRequired: "Please enter a video prompt",
+        finishConfig: "Please finish your configuration first",
+        addedToAssets: "Added to My Assets",
+        generated: "Video generated",
+        generationFailed: "Generation failed",
+        timeout: "Video generation timed out. Please try again later.",
+        title: "Video Studio",
+        history: "History",
+        params: "Settings",
+        prompt: "Prompt",
+        promptLibrary: "Prompt Library",
+        myAssets: "My Assets",
+        promptPlaceholder: "Describe camera movement, subject actions, mood, and visual style",
+        references: "Reference Images",
+        referenceVideos: "Reference Videos",
+        referenceAudio: "Reference Audio",
+        paste: "Paste",
+        upload: "Upload",
+        removeImage: "Remove reference image",
+        removeVideo: "Remove reference video",
+        removeAudio: "Remove reference audio",
+        noReferences: "No reference images yet, up to 9",
+        noReferenceVideos: "No reference videos yet, up to 3",
+        noReferenceAudio: "No reference audio yet, up to 3, mp3/wav, max 15MB each",
+        adjust: "Adjust",
+        generate: "Generate",
+        results: "Results",
+        waiting: "Waiting",
+        noResults: "No videos generated yet",
+        logs: "Generation History",
+        deleteLogs: "Delete History",
+        deleteLogsConfirm: (count: number) => `Delete the selected ${count} generation records?`,
+        model: "Model",
+        saveToAssets: "Save to Assets",
+        download: "Download",
+        pending: "Generating",
+        failed: "Generation Failed",
+        retry: "Retry",
+        create: "New",
+        unselect: "Clear",
+        selectAll: "Select All",
+        delete: "Delete",
+        noLogs: "No generation history yet",
+        created: "Pending",
+        success: "Success",
+        cancel: "Cancel",
+        audioRule: "Ignored reference audio outside the allowed range: 2-15 seconds each, 15 seconds total max.",
+    },
+} satisfies Record<StudioLocale, Record<string, string | ((count: number) => string)>>;
+
 export default function VideoPage() {
     const { message } = App.useApp();
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const copy = videoCopy[locale];
     const fileInputRef = useRef<HTMLInputElement>(null);
     const activeLogIdsRef = useRef<Set<string>>(new Set());
     const config = useConfigStore((state) => state.config);
@@ -110,13 +226,13 @@ export default function VideoPage() {
     const addReferences = async (files?: FileList | null) => {
         const selectedFiles = Array.from(files || []);
         const unsupported = selectedFiles.filter((file) => !file.type.startsWith("image/") && !file.type.startsWith("video/") && !isSupportedAudioFile(file));
-        if (unsupported.length) message.warning("已忽略不支持的参考素材，请使用图片、mp4/mov 视频或 mp3/wav 音频");
+        if (unsupported.length) message.warning(copy.unsupported);
         const imageFiles = selectedFiles.filter((file) => file.type.startsWith("image/") && file.size <= SEEDANCE_REFERENCE_LIMITS.imageMaxBytes).slice(0, SEEDANCE_REFERENCE_LIMITS.images - references.length);
         const videoFiles = selectedFiles.filter((file) => file.type.startsWith("video/") && file.size <= SEEDANCE_REFERENCE_LIMITS.videoMaxBytes).slice(0, SEEDANCE_REFERENCE_LIMITS.videos - videoReferences.length);
         const audioFiles = selectedFiles.filter((file) => isSupportedAudioFile(file) && file.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, SEEDANCE_REFERENCE_LIMITS.audios - audioReferences.length);
-        if (selectedFiles.some((file) => file.type.startsWith("image/") && file.size > SEEDANCE_REFERENCE_LIMITS.imageMaxBytes)) message.warning("已忽略超过 30MB 的参考图");
-        if (selectedFiles.some((file) => file.type.startsWith("video/") && file.size > SEEDANCE_REFERENCE_LIMITS.videoMaxBytes)) message.warning("已忽略超过 50MB 的参考视频");
-        if (selectedFiles.some((file) => isSupportedAudioFile(file) && file.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning("已忽略超过 15MB 的参考音频");
+        if (selectedFiles.some((file) => file.type.startsWith("image/") && file.size > SEEDANCE_REFERENCE_LIMITS.imageMaxBytes)) message.warning(copy.overImage);
+        if (selectedFiles.some((file) => file.type.startsWith("video/") && file.size > SEEDANCE_REFERENCE_LIMITS.videoMaxBytes)) message.warning(copy.overVideo);
+        if (selectedFiles.some((file) => isSupportedAudioFile(file) && file.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning(copy.overAudio);
         const nextReferences = await Promise.all(
             imageFiles.map(async (file) => {
                 const image = await uploadImage(file);
@@ -149,7 +265,7 @@ export default function VideoPage() {
             const items = await navigator.clipboard.read();
             const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("image/")).map((type) => item.getType(type))));
             if (!blobs.length) {
-                message.error("剪切板里没有可读取的图片");
+                message.error(copy.clipboardEmpty);
                 return;
             }
             const nextReferences = await Promise.all(
@@ -159,9 +275,9 @@ export default function VideoPage() {
                 }),
             );
             setReferences((value) => [...value, ...nextReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.images));
-            message.success(`已读取 ${nextReferences.length} 张参考图`);
+            message.success(copy.clipboardRead(nextReferences.length));
         } catch {
-            message.error("剪切板里没有可读取的图片");
+            message.error(copy.clipboardEmpty);
         }
     };
     const generate = async () => {
@@ -179,7 +295,7 @@ export default function VideoPage() {
             await saveLog(log);
             void pollGenerationLog(log, snapshot.config);
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : "生成失败";
+            const errorMessage = error instanceof Error ? error.message : copy.generationFailed;
             setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
             await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: performance.now() - batchStartedAt, status: "失败", error: errorMessage }));
             message.error(errorMessage);
@@ -190,11 +306,11 @@ export default function VideoPage() {
     const buildRequestSnapshot = () => {
         const text = prompt.trim();
         if (!text) {
-            message.error("请输入视频提示词");
+            message.error(copy.promptRequired);
             return null;
         }
         if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning("请先完成配置");
+            message.warning(copy.finishConfig);
             openConfigDialog(true);
             return null;
         }
@@ -224,7 +340,7 @@ export default function VideoPage() {
             data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
             metadata: { source: "video-page", prompt },
         });
-        message.success("已加入我的素材");
+        message.success(copy.addedToAssets);
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {
@@ -307,15 +423,15 @@ export default function VideoPage() {
                     };
                     setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
                     await saveLog({ ...log, status: "成功", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined });
-                    message.success("视频已生成");
+                    message.success(copy.generated);
                     return;
                 }
                 if (state.status === "failed") throw new Error(state.error);
-                if (attempt === 119) throw new Error("视频生成超时，请稍后重试");
+                if (attempt === 119) throw new Error(copy.timeout);
                 await delay(log.task.provider === "seedance" ? 5000 : 2500);
             }
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : "生成失败";
+            const errorMessage = error instanceof Error ? error.message : copy.generationFailed;
             setResults([{ id: log.id, status: "failed", error: errorMessage }]);
             await saveLog({ ...log, status: "失败", durationMs: Date.now() - log.createdAt, error: errorMessage });
             message.error(errorMessage);
@@ -341,7 +457,7 @@ export default function VideoPage() {
         if (log.config.videoSeconds) updateConfig("videoSeconds", log.config.videoSeconds);
         if (log.config.videoGenerateAudio) updateConfig("videoGenerateAudio", log.config.videoGenerateAudio);
         if (log.config.videoWatermark) updateConfig("videoWatermark", log.config.videoWatermark);
-        setResults(log.status === "生成中" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
+        setResults(log.status === "生成中" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || copy.generationFailed }]);
     };
 
     return (
@@ -354,13 +470,13 @@ export default function VideoPage() {
                 <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
                     <div className="thin-scrollbar flex flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto">
                         <div className="flex items-start justify-between gap-3">
-                            <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">视频创作台</h1>
+                            <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{copy.title}</h1>
                             <div className="flex shrink-0 gap-2 lg:hidden">
                                 <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
-                                    记录
+                                    {copy.history}
                                 </Button>
                                 <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                    参数
+                                    {copy.params}
                                 </Button>
                             </div>
                         </div>
@@ -368,28 +484,28 @@ export default function VideoPage() {
                         <div className="mt-6 space-y-5">
                             <div>
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">提示词</span>
+                                    <span className="text-base font-semibold">{copy.prompt}</span>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
-                                            查看提示词库
+                                            {copy.promptLibrary}
                                         </Button>
                                         <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
-                                            查看我的素材
+                                            {copy.myAssets}
                                         </Button>
                                     </div>
                                 </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述镜头运动、主体动作、场景氛围和画面风格" />
+                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder={copy.promptPlaceholder} />
                             </div>
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">参考图</span>
+                                    <span className="text-base font-semibold">{copy.references}</span>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
-                                            剪切板
+                                            {copy.paste}
                                         </Button>
                                         <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                            上传
+                                            {copy.upload}
                                         </Button>
                                     </div>
                                 </div>
@@ -399,20 +515,20 @@ export default function VideoPage() {
                                             <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{seedanceReferenceLabel("image", index)}</span>
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考图">
+                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={copy.removeImage}>
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
                                     ))}
-                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">暂无参考图，最多 9 张</div> : null}
+                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{copy.noReferences}</div> : null}
                                 </div>
                             </div>
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">参考视频</span>
+                                    <span className="text-base font-semibold">{copy.referenceVideos}</span>
                                     <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                        上传
+                                        {copy.upload}
                                     </Button>
                                 </div>
                                 <div className="hover-scrollbar hover-scrollbar-hint flex min-h-24 w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden rounded-lg border border-dashed border-stone-300 p-2 pb-3 overscroll-x-contain dark:border-stone-700">
@@ -421,20 +537,20 @@ export default function VideoPage() {
                                             <video src={item.url} className="size-full object-cover" muted preload="metadata" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{seedanceReferenceLabel("video", index)}</span>
                                             <ReferenceOrderButtons index={index} total={videoReferences.length} onMove={(offset) => setVideoReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setVideoReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考视频">
+                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setVideoReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={copy.removeVideo}>
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
                                     ))}
-                                    {!videoReferences.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">暂无参考视频，最多 3 个</div> : null}
+                                    {!videoReferences.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{copy.noReferenceVideos}</div> : null}
                                 </div>
                             </div>
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">参考音频</span>
+                                    <span className="text-base font-semibold">{copy.referenceAudio}</span>
                                     <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                        上传
+                                        {copy.upload}
                                     </Button>
                                 </div>
                                 <div className="hover-scrollbar hover-scrollbar-hint flex min-h-24 w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden rounded-lg border border-dashed border-stone-300 p-2 pb-3 overscroll-x-contain dark:border-stone-700">
@@ -447,12 +563,12 @@ export default function VideoPage() {
                                             </div>
                                             <audio src={item.url} controls className="h-8 w-full" preload="metadata" />
                                             <ReferenceOrderButtons index={index} total={audioReferences.length} onMove={(offset) => setAudioReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setAudioReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考音频">
+                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setAudioReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={copy.removeAudio}>
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
                                     ))}
-                                    {!audioReferences.length ? <div className="flex min-w-full items-center justify-center text-center text-sm text-stone-500">暂无参考音频，最多 3 个，mp3/wav，单个 15MB 内</div> : null}
+                                    {!audioReferences.length ? <div className="flex min-w-full items-center justify-center text-center text-sm text-stone-500">{copy.noReferenceAudio}</div> : null}
                                 </div>
                             </div>
 
@@ -461,7 +577,7 @@ export default function VideoPage() {
                                     {modelOptionLabel(effectiveConfig, model)} · {normalizeResolution(effectiveConfig.vquality)}p · {videoSizeLabel(effectiveConfig.size)} · {normalizeVideoSeconds(effectiveConfig.videoSeconds)}s
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                    调整
+                                    {copy.adjust}
                                 </Button>
                             </div>
 
@@ -472,24 +588,24 @@ export default function VideoPage() {
 
                         <div className="mt-auto pt-6">
                             <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
-                                开始生成
+                                {copy.generate}
                             </Button>
                         </div>
                     </div>
 
                     <div className="thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5">
                         <div className="mb-4 flex items-center justify-between gap-3">
-                            <h2 className="text-xl font-semibold">生成结果</h2>
+                            <h2 className="text-xl font-semibold">{copy.results}</h2>
                             {running ? <Tag className="m-0 px-2 py-1">等待 {formatDuration(elapsedMs)}</Tag> : null}
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
-                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || "生成失败"} onRetry={retryResult} /> : <PendingVideoCard key={result.id} />))}
+                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || copy.generationFailed} onRetry={retryResult} /> : <PendingVideoCard key={result.id} />))}
                             </div>
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
                                 <VideoIcon className="mb-4 size-11 text-stone-400" />
-                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有生成视频" />
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={copy.noResults} />
                             </div>
                         )}
                     </div>
@@ -506,18 +622,18 @@ export default function VideoPage() {
                     event.target.value = "";
                 }}
             />
-            <Drawer title="生成记录" placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
+            <Drawer title={copy.logs} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
-            <Drawer title="参数" placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+            <Drawer title={copy.params} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
-            <Modal title="删除生成记录" open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
-                确定删除选中的 {selectedLogIds.length} 条生成记录吗？
+            <Modal title={copy.deleteLogs} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={copy.delete} okButtonProps={{ danger: true }} cancelText={copy.cancel}>
+                {copy.deleteLogsConfirm(selectedLogIds.length)}
             </Modal>
         </div>
     );
@@ -525,11 +641,13 @@ export default function VideoPage() {
 
 function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = videoCopy[locale];
 
     return (
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">模型</span>
+                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{text.model}</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
             <div className="col-span-2">
@@ -540,6 +658,8 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
 }
 
 function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedVideo; onDownload: (video: GeneratedVideo) => void; onSaveAsset: (video: GeneratedVideo) => void }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = videoCopy[locale];
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
             <video src={video.url} controls className="aspect-video w-full bg-black object-contain" />
@@ -553,10 +673,10 @@ function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedV
                 </div>
                 <div className="flex shrink-0 gap-1">
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => onSaveAsset(video)}>
-                        添加到素材
+                        {text.saveToAssets}
                     </Button>
                     <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(video)}>
-                        下载
+                        {text.download}
                     </Button>
                 </div>
             </div>
@@ -565,28 +685,32 @@ function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedV
 }
 
 function PendingVideoCard() {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = videoCopy[locale];
     return (
         <div className="relative aspect-video overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
-                <span>生成中</span>
+                <span>{text.pending}</span>
             </div>
         </div>
     );
 }
 
 function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => void }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = videoCopy[locale];
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
             <div className="flex aspect-video flex-col items-center justify-center gap-3 p-5 text-center">
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{text.failed}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
             </div>
             <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
                 <Button size="small" danger onClick={onRetry}>
-                    重试
+                    {text.retry}
                 </Button>
             </div>
         </div>
@@ -610,37 +734,41 @@ function LogPanel({
     onDeleteSelected: () => void;
     onPreviewLog: (log: GenerationLog) => void;
 }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = videoCopy[locale];
     const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
     const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
 
     return (
         <>
             <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold">生成记录</h2>
+                <h2 className="text-base font-semibold">{text.logs}</h2>
                 <Tag className="m-0">{logs.length}</Tag>
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
                 <Button size="small" icon={<Plus className="size-3.5" />} onClick={onCreateSession}>
-                    新建
+                    {text.create}
                 </Button>
                 <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!logs.length} onClick={toggleAll}>
-                    {allSelected ? "取消" : "全选"}
+                    {allSelected ? text.unselect : text.selectAll}
                 </Button>
                 <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
-                    删除
+                    {text.delete}
                 </Button>
             </div>
             <div className="space-y-3">
                 {logs.map((log) => (
                     <LogCard key={log.id} log={log} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onClick={() => onPreviewLog(log)} />
                 ))}
-                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">暂无生成记录</div> : null}
+                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{text.noLogs}</div> : null}
             </div>
         </>
     );
 }
 
 function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = videoCopy[locale];
     return (
         <button type="button" className={`block w-full rounded-lg border p-2 text-left transition ${active ? "border-stone-900 bg-blue-50 dark:border-stone-100 dark:bg-blue-950/20" : "border-stone-200 bg-background hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-900"}`} onClick={onClick}>
             <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
@@ -655,7 +783,7 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                 </div>
                 <div className="grid justify-items-end gap-2">
                     <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : "red"}>
-                        {log.status}
+                        {log.status === "成功" ? text.success : log.status === "生成中" ? text.created : text.failed}
                     </Tag>
                     <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
                         {formatDuration(log.durationMs)}
@@ -752,7 +880,7 @@ function filterAudioReferencesByDuration(existing: ReferenceAudio[], next: Refer
         total += item.durationMs || 0;
         accepted.push(item);
     }
-    if (skipped) warn("已忽略不符合时长要求的参考音频：单个 2-15 秒，总时长不超过 15 秒");
+    if (skipped) warn(videoCopy.zh.audioRule);
     return accepted;
 }
 

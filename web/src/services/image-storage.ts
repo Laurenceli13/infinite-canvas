@@ -13,12 +13,15 @@ export type UploadedImage = {
 };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
+const metaStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_file_meta" });
 const objectUrls = new Map<string, string>();
+type CacheMeta = { touchedAt: number };
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
     const storageKey = `image:${nanoid()}`;
     await store.setItem(storageKey, blob);
+    await touchImageCacheEntry(storageKey);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     const meta = await readImageMeta(url);
@@ -28,20 +31,27 @@ export async function uploadImage(input: string | Blob): Promise<UploadedImage> 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
-    if (cached) return cached;
+    if (cached) {
+        await touchImageCacheEntry(storageKey);
+        return cached;
+    }
     const blob = await store.getItem<Blob>(storageKey);
     if (!blob) return fallback;
+    await touchImageCacheEntry(storageKey);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
 }
 
 export async function getImageBlob(storageKey: string) {
-    return store.getItem<Blob>(storageKey);
+    const blob = await store.getItem<Blob>(storageKey);
+    if (blob) await touchImageCacheEntry(storageKey);
+    return blob;
 }
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
+    await touchImageCacheEntry(storageKey);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -59,7 +69,7 @@ export async function deleteStoredImages(keys: Iterable<string>) {
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
-            await store.removeItem(key);
+            await Promise.all([store.removeItem(key), metaStore.removeItem(key)]);
         }),
     );
 }
@@ -73,11 +83,25 @@ export async function cleanupUnusedImages(usedData: unknown) {
     await deleteStoredImages(unused);
 }
 
+export async function cleanupExpiredImages(maxAgeMs: number) {
+    const now = Date.now();
+    const expired: string[] = [];
+    await metaStore.iterate<CacheMeta | null, void>((value, key) => {
+        const touchedAt = value && typeof value === "object" && typeof value.touchedAt === "number" ? value.touchedAt : 0;
+        if (!touchedAt || now - touchedAt >= maxAgeMs) expired.push(key);
+    });
+    await deleteStoredImages(expired);
+}
+
 export function collectImageStorageKeys(value: unknown, keys = new Set<string>()) {
     if (!value || typeof value !== "object") return keys;
     if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.startsWith("image:")) keys.add(value.storageKey);
     Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectImageStorageKeys(child, keys)) : collectImageStorageKeys(item, keys)));
     return keys;
+}
+
+async function touchImageCacheEntry(storageKey: string) {
+    await metaStore.setItem(storageKey, { touchedAt: Date.now() });
 }
 
 function blobToDataUrl(blob: Blob) {

@@ -56,6 +56,11 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    workflowKey?: "ecommerce-suite" | "fashion-suite" | "video-suite";
+    workflowOutputType?: string;
+    pantoneCard?: boolean;
+    safetyFallback?: boolean;
+    asyncJobId?: string;
 };
 
 export type CanvasNodeData = {

@@ -10,13 +10,14 @@ import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
-import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionLabel, modelOptionName, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useStudioLocaleStore, type StudioLocale } from "@/stores/use-studio-locale-store";
 import type { ReferenceImage } from "@/types/image";
 
 type GeneratedImage = {
@@ -60,13 +61,113 @@ type GenerationLog = {
 type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count">;
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+type RequestSnapshot = { text: string; config: AiConfig; references: ReferenceImage[] };
 
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
 const RESULT_ACTION_BUTTON_CLASS = "min-w-0 px-1.5 [&_.ant-btn-icon]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 
+const imageCopy = {
+    zh: {
+        clipboardEmpty: "剪切板里没有可读取的图片",
+        clipboardRead: (count: number) => `已读取 ${count} 张参考图`,
+        promptRequired: "请输入生图提示词",
+        finishConfig: "请先完成配置",
+        historySaveFailed: "图片已生成，但保存记录失败。",
+        generated: "图片已生成",
+        generationFailed: "生成失败",
+        addedToReference: "已加入参考图",
+        addedToAssets: "已加入我的素材",
+        assetTypeWarning: "生图工作台只能使用文本或图片素材",
+        title: "生图工作台",
+        history: "记录",
+        params: "参数",
+        prompt: "提示词",
+        promptLibrary: "查看提示词库",
+        myAssets: "查看我的素材",
+        promptPlaceholder: "描述画面主体、风格、构图、光线和用途",
+        references: "参考图",
+        paste: "剪切板",
+        upload: "上传",
+        removeReference: "移除参考图",
+        noReferences: "暂无参考图",
+        adjust: "调整",
+        generate: "开始生成",
+        results: "生成结果",
+        waiting: "等待",
+        noResults: "还没有生成图片",
+        logs: "生成记录",
+        deleteLogs: "删除生成记录",
+        deleteLogsConfirm: (count: number) => `确定删除选中的 ${count} 条生成记录吗？`,
+        model: "模型",
+        saveToAssets: "添加到素材",
+        addReference: "加入参考图",
+        download: "下载",
+        pending: "生成中",
+        failed: "生成失败",
+        retry: "重试",
+        create: "新建",
+        unselect: "取消",
+        selectAll: "全选",
+        delete: "删除",
+        noLogs: "暂无生成记录",
+        success: "成功",
+        fail: "失败",
+        imagesUnit: "张",
+    },
+    en: {
+        clipboardEmpty: "No readable image found in the clipboard",
+        clipboardRead: (count: number) => `Loaded ${count} reference images`,
+        promptRequired: "Please enter an image prompt",
+        finishConfig: "Please finish your configuration first",
+        historySaveFailed: "Image created, but saving history failed.",
+        generated: "Image generated",
+        generationFailed: "Generation failed",
+        addedToReference: "Added to references",
+        addedToAssets: "Added to My Assets",
+        assetTypeWarning: "Image Studio only supports text and image assets",
+        title: "Image Studio",
+        history: "History",
+        params: "Settings",
+        prompt: "Prompt",
+        promptLibrary: "Prompt Library",
+        myAssets: "My Assets",
+        promptPlaceholder: "Describe the subject, style, composition, lighting, and intended use",
+        references: "References",
+        paste: "Paste",
+        upload: "Upload",
+        removeReference: "Remove reference image",
+        noReferences: "No reference images yet",
+        adjust: "Adjust",
+        generate: "Generate",
+        results: "Results",
+        waiting: "Waiting",
+        noResults: "No images generated yet",
+        logs: "Generation History",
+        deleteLogs: "Delete History",
+        deleteLogsConfirm: (count: number) => `Delete the selected ${count} generation records?`,
+        model: "Model",
+        saveToAssets: "Save to Assets",
+        addReference: "Add as Reference",
+        download: "Download",
+        pending: "Generating",
+        failed: "Generation Failed",
+        retry: "Retry",
+        create: "New",
+        unselect: "Clear",
+        selectAll: "Select All",
+        delete: "Delete",
+        noLogs: "No generation history yet",
+        success: "Success",
+        fail: "Failed",
+        imagesUnit: "images",
+    },
+} satisfies Record<StudioLocale, Record<string, string | ((count: number) => string)>>;
+
 export default function ImagePage() {
     const { message } = App.useApp();
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const copy = imageCopy[locale];
     const fileInputRef = useRef<HTMLInputElement>(null);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
@@ -119,7 +220,7 @@ export default function ImagePage() {
             const items = await navigator.clipboard.read();
             const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("image/")).map((type) => item.getType(type))));
             if (!blobs.length) {
-                message.error("剪切板里没有可读取的图片");
+                message.error(copy.clipboardEmpty);
                 return;
             }
             const nextReferences = await Promise.all(
@@ -129,25 +230,26 @@ export default function ImagePage() {
                 }),
             );
             setReferences((value) => [...value, ...nextReferences]);
-            message.success(`已读取 ${nextReferences.length} 张参考图`);
+            message.success(copy.clipboardRead(nextReferences.length));
         } catch {
-            message.error("剪切板里没有可读取的图片");
+            message.error(copy.clipboardEmpty);
         }
     };
 
     const generate = async () => {
-        const text = prompt.trim();
-        if (!text) {
-            message.error("请输入生图提示词");
+        const promptText = prompt.trim();
+        if (!promptText) {
+            message.error(copy.promptRequired);
             return;
         }
         if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning("请先完成配置");
+            message.warning(copy.finishConfig);
             openConfigDialog(true);
             return;
         }
 
-        const snapshot = buildRequestSnapshot();
+        const useSerialRequest = modelOptionName(model).toLowerCase().includes("agnes") && generationCount > 1;
+        const snapshot = buildRequestSnapshot("1");
         if (!snapshot) return;
 
         setElapsedMs(0);
@@ -157,24 +259,41 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
-        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+        let successImages: GeneratedImage[] = [];
+        let failCount = 0;
+        let failed: { reason: unknown } | undefined;
 
-        const result = await Promise.allSettled(tasks);
-        const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
+        if (useSerialRequest) {
+            const serialResult = await runSerialGeneration(snapshot, generationCount);
+            successImages = serialResult.successImages;
+            failCount = serialResult.failCount;
+            failed = serialResult.failed ? { reason: serialResult.failed } : undefined;
+        } else {
+            const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+            const result = await Promise.allSettled(tasks);
+            successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
+            failCount = generationCount - successImages.length;
+            const rejected = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
+            failed = rejected ? { reason: rejected.reason } : undefined;
+        }
+
         const successCount = successImages.length;
-        const failCount = generationCount - successCount;
-        const failed = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
 
         try {
-            const logImages = await Promise.all(
-                successImages.map(async (image) => {
-                    const stored = await uploadImage(image.dataUrl);
-                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
-                }),
-            );
+            let logImages = successImages;
+            try {
+                logImages = await Promise.all(
+                    successImages.map(async (image) => {
+                        const stored = await uploadImage(image.dataUrl);
+                        return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+                    }),
+                );
+            } catch {
+                message.warning(copy.historySaveFailed);
+            }
             saveLog(
                 buildLog({
-                    prompt: text,
+                    prompt: promptText,
                     model,
                     config: { ...snapshot.config, count: String(generationCount) },
                     references: snapshot.references,
@@ -185,7 +304,7 @@ export default function ImagePage() {
                     images: logImages,
                 }),
             );
-            successCount ? message.success("图片已生成") : message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
+            successCount ? message.success(copy.generated) : message.error(failed?.reason instanceof Error ? failed.reason.message : copy.generationFailed);
         } finally {
             setRunning(false);
         }
@@ -198,7 +317,7 @@ export default function ImagePage() {
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
         const stored = await uploadImage(image.dataUrl);
         setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
-        message.success("已加入参考图");
+        message.success(copy.addedToReference);
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
@@ -212,7 +331,7 @@ export default function ImagePage() {
             data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
             metadata: { source: "image-page", prompt },
         });
-        message.success("已加入我的素材");
+        message.success(copy.addedToAssets);
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {
@@ -222,7 +341,7 @@ export default function ImagePage() {
             const stored = await uploadImage(payload.dataUrl);
             setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
         } else {
-            message.warning("生图工作台只能使用文本或图片素材");
+            message.warning(copy.assetTypeWarning);
         }
         setAssetPickerOpen(false);
     };
@@ -266,21 +385,21 @@ export default function ImagePage() {
         setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
     };
 
-    const buildRequestSnapshot = () => {
+    const buildRequestSnapshot = (count = "1") => {
         const text = prompt.trim();
         if (!text) {
-            message.error("请输入生图提示词");
+            message.error(imageCopy[locale].promptRequired);
             return null;
         }
         if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning("请先完成配置");
+            message.warning(imageCopy[locale].finishConfig);
             openConfigDialog(true);
             return null;
         }
-        return { text, config: { ...effectiveConfig, model, count: "1" }, references: [...references] };
+        return { text, config: { ...effectiveConfig, model, count }, references: [...references] };
     };
 
-    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }) => {
+    const runGenerationSlot = async (index: number, snapshot: RequestSnapshot) => {
         const itemStartedAt = performance.now();
         try {
             const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references) : await requestGeneration(snapshot.config, snapshot.text);
@@ -294,6 +413,25 @@ export default function ImagePage() {
             setResults((value) => updateResultAt(value, index, { status: "failed", error: error instanceof Error ? error.message : "生成失败" }));
             throw error;
         }
+    };
+
+    const runSerialGeneration = async (snapshot: RequestSnapshot, requestedCount: number) => {
+        const successImages: GeneratedImage[] = [];
+        let failed: unknown;
+
+        for (let index = 0; index < requestedCount; index += 1) {
+            try {
+                successImages.push(await runGenerationSlot(index, snapshot));
+            } catch (error) {
+                failed ??= error;
+            }
+        }
+
+        return {
+            successImages,
+            failCount: requestedCount - successImages.length,
+            failed,
+        };
     };
 
     const retryResult = (index: number) => {
@@ -324,14 +462,14 @@ export default function ImagePage() {
                         <div>
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                    <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">生图工作台</h1>
+                                    <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{copy.title}</h1>
                                 </div>
                                 <div className="flex shrink-0 gap-2 lg:hidden">
                                     <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
-                                        记录
+                                        {copy.history}
                                     </Button>
                                     <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                        参数
+                                        {copy.params}
                                     </Button>
                                 </div>
                             </div>
@@ -340,28 +478,28 @@ export default function ImagePage() {
                         <div className="mt-6 space-y-5">
                             <div>
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">提示词</span>
+                                    <span className="text-base font-semibold">{copy.prompt}</span>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
-                                            查看提示词库
+                                            {copy.promptLibrary}
                                         </Button>
                                         <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
-                                            查看我的素材
+                                            {copy.myAssets}
                                         </Button>
                                     </div>
                                 </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
+                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder={copy.promptPlaceholder} />
                             </div>
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">参考图</span>
+                                    <span className="text-base font-semibold">{copy.references}</span>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
-                                            剪切板
+                                            {copy.paste}
                                         </Button>
                                         <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                            上传
+                                            {copy.upload}
                                         </Button>
                                     </div>
                                 </div>
@@ -382,13 +520,13 @@ export default function ImagePage() {
                                                 type="button"
                                                 className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex"
                                                 onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))}
-                                                aria-label="移除参考图"
+                                                aria-label={copy.removeReference}
                                             >
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
                                     ))}
-                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">暂无参考图</div> : null}
+                                    {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{copy.noReferences}</div> : null}
                                 </div>
                             </div>
 
@@ -397,7 +535,7 @@ export default function ImagePage() {
                                     {modelOptionLabel(effectiveConfig, model)} · {effectiveConfig.size} · {effectiveConfig.quality}
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                    调整
+                                    {copy.adjust}
                                 </Button>
                             </div>
 
@@ -408,7 +546,7 @@ export default function ImagePage() {
 
                         <div className="mt-auto pt-6">
                             <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
-                                开始生成
+                                {copy.generate}
                             </Button>
                         </div>
                     </div>
@@ -416,9 +554,9 @@ export default function ImagePage() {
                     <div className="thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5">
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
-                                <h2 className="text-xl font-semibold">生成结果</h2>
+                                <h2 className="text-xl font-semibold">{copy.results}</h2>
                             </div>
-                            {running ? <Tag className="m-0 px-2 py-1">等待 {formatDuration(elapsedMs)}</Tag> : null}
+                            {running ? <Tag className="m-0 px-2 py-1">{copy.waiting} {formatDuration(elapsedMs)}</Tag> : null}
                         </div>
                         {results.length ? (
                             <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
@@ -426,7 +564,7 @@ export default function ImagePage() {
                                     result.status === "success" && result.image ? (
                                         <ResultImageCard key={result.id} image={result.image} index={index} onEdit={addResultToReferences} onDownload={downloadImage} onSaveAsset={saveResultToAssets} />
                                     ) : result.status === "failed" ? (
-                                        <FailedImageCard key={result.id} error={result.error || "生成失败"} onRetry={() => retryResult(index)} />
+                                        <FailedImageCard key={result.id} error={result.error || copy.generationFailed} onRetry={() => retryResult(index)} />
                                     ) : (
                                         <PendingImageCard key={result.id} />
                                     ),
@@ -435,7 +573,7 @@ export default function ImagePage() {
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
                                 <ImagePlus className="mb-4 size-11 text-stone-400" />
-                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有生成图片" />
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={copy.noResults} />
                             </div>
                         )}
                     </div>
@@ -452,7 +590,7 @@ export default function ImagePage() {
                     event.target.value = "";
                 }}
             />
-            <Drawer title="生成记录" placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
+            <Drawer title={copy.logs} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel
                     logs={logs}
                     selectedLogIds={selectedLogIds}
@@ -463,15 +601,15 @@ export default function ImagePage() {
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
             </Drawer>
-            <Drawer title="参数" placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+            <Drawer title={copy.params} placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
-            <Modal title="删除生成记录" open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
-                确定删除选中的 {selectedLogIds.length} 条生成记录吗？
+            <Modal title={copy.deleteLogs} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={copy.delete} okButtonProps={{ danger: true }} cancelText={locale === "zh" ? "取消" : "Cancel"}>
+                {copy.deleteLogsConfirm(selectedLogIds.length)}
             </Modal>
         </div>
     );
@@ -479,11 +617,13 @@ export default function ImagePage() {
 
 function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const copy = imageCopy[locale];
 
     return (
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">模型</span>
+                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{copy.model}</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("imageModel", value)} capability="image" fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
             <div className="col-span-2">
@@ -506,9 +646,11 @@ function ResultImageCard({
     onDownload: (image: GeneratedImage, index: number) => void;
     onSaveAsset: (image: GeneratedImage, index: number) => void;
 }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = imageCopy[locale];
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-square object-cover" />
+            <Image src={image.dataUrl} alt={`${text.results} ${index + 1}`} className="aspect-square object-cover" />
             <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     <span>
@@ -518,19 +660,19 @@ function ResultImageCard({
                     <span>{formatDuration(image.durationMs)}</span>
                 </div>
                 <div className="grid min-w-0 grid-cols-3 gap-2">
-                    <Tooltip title="添加到素材">
+                    <Tooltip title={text.saveToAssets}>
                         <Button className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void onSaveAsset(image, index)}>
-                            添加到素材
+                            {text.saveToAssets}
                         </Button>
                     </Tooltip>
-                    <Tooltip title="加入参考图">
+                    <Tooltip title={text.addReference}>
                         <Button className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<PenLine className="size-3.5" />} onClick={() => void onEdit(image, index)}>
-                            加入参考图
+                            {text.addReference}
                         </Button>
                     </Tooltip>
-                    <Tooltip title="下载">
+                    <Tooltip title={text.download}>
                         <Button className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(image, index)}>
-                            下载
+                            {text.download}
                         </Button>
                     </Tooltip>
                 </div>
@@ -540,6 +682,8 @@ function ResultImageCard({
 }
 
 function PendingImageCard() {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = imageCopy[locale];
     return (
         <div className="relative aspect-square overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div
@@ -551,24 +695,26 @@ function PendingImageCard() {
             />
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
-                <span>生成中</span>
+                <span>{text.pending}</span>
             </div>
         </div>
     );
 }
 
 function FailedImageCard({ error, onRetry }: { error: string; onRetry: () => void }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = imageCopy[locale];
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
             <div className="flex aspect-square flex-col items-center justify-center gap-3 p-5 text-center">
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{text.failed}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
             </div>
             <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
                 <Button size="small" danger onClick={onRetry}>
-                    重试
+                    {text.retry}
                 </Button>
             </div>
         </div>
@@ -596,6 +742,8 @@ function LogPanel({
     onDeleteSelected: () => void;
     onPreviewLog: (log: GenerationLog) => void;
 }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = imageCopy[locale];
     const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
     const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
 
@@ -603,19 +751,19 @@ function LogPanel({
         <>
             <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                    <h2 className="text-base font-semibold">生成记录</h2>
+                    <h2 className="text-base font-semibold">{text.logs}</h2>
                 </div>
                 <Tag className="m-0">{logs.length}</Tag>
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
                 <Button size="small" icon={<Plus className="size-3.5" />} onClick={onCreateSession}>
-                    新建
+                    {text.create}
                 </Button>
                 <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!logs.length} onClick={toggleAll}>
-                    {allSelected ? "取消" : "全选"}
+                    {allSelected ? text.unselect : text.selectAll}
                 </Button>
                 <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
-                    删除
+                    {text.delete}
                 </Button>
             </div>
             <div className="space-y-3">
@@ -629,13 +777,15 @@ function LogPanel({
                         onClick={() => onPreviewLog(log)}
                     />
                 ))}
-                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">暂无生成记录</div> : null}
+                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{text.noLogs}</div> : null}
             </div>
         </>
     );
 }
 
 function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
+    const locale = useStudioLocaleStore((state) => state.locale);
+    const text = imageCopy[locale];
     const thumbnails = (log.thumbnails || []).filter(Boolean).slice(0, 4);
 
     return (
@@ -661,16 +811,16 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                 <div className="grid justify-items-end gap-2">
                     <div className="flex gap-1">
                         <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="blue">
-                            成功 {log.successCount ?? log.imageCount}
+                            {text.success} {log.successCount ?? log.imageCount}
                         </Tag>
                         {log.failCount ? (
                             <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
-                                失败 {log.failCount}
+                                {text.fail} {log.failCount}
                             </Tag>
                         ) : null}
                     </div>
                     <div className="flex flex-wrap justify-end gap-1">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.imageCount} 张</Tag>
+                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.imageCount} {text.imagesUnit}</Tag>
                         <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
                             {formatDuration(log.durationMs)}
                         </Tag>
