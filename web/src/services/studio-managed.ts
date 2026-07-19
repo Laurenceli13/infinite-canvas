@@ -115,6 +115,10 @@ export type StudioConcurrencyUser = {
 };
 
 export type StudioConcurrencyConfig = {
+    globalLimit: number;
+    globalMaxLimit: number;
+    runningTotal: number;
+    queuedTotal: number;
     defaultLimit: number;
     fallbackLimit: number;
     maxLimit: number;
@@ -210,23 +214,21 @@ export async function fetchStudioConcurrency() {
     return response.data;
 }
 
-export async function updateStudioDefaultConcurrency(defaultLimit: number) {
-    const response = await axios.patch<ApiEnvelope<{ defaultLimit: number }>>(studioApi("/admin/concurrency"), { defaultLimit });
+export async function updateStudioConcurrencySettings(globalLimit: number, defaultLimit: number) {
+    const response = await axios.patch<ApiEnvelope<{ globalLimit: number; defaultLimit: number }>>(studioApi("/admin/concurrency"), {
+        globalLimit,
+        defaultLimit,
+    });
     return response.data;
 }
 
 export async function updateStudioUserConcurrency(source: string, userId: string, limit: number) {
-    const response = await axios.patch<ApiEnvelope<{ limit: number }>>(
-        studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`),
-        { limit },
-    );
+    const response = await axios.patch<ApiEnvelope<{ limit: number }>>(studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`), { limit });
     return response.data;
 }
 
 export async function resetStudioUserConcurrency(source: string, userId: string) {
-    const response = await axios.delete<ApiEnvelope<Record<string, never>>>(
-        studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`),
-    );
+    const response = await axios.delete<ApiEnvelope<Record<string, never>>>(studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`));
     return response.data;
 }
 
@@ -316,7 +318,7 @@ export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): 
         baseUrl: "https://studio.massmore.org",
         apiKey: "studio-managed",
         apiFormat: items[0]?.apiFormat || "openai",
-        models: Array.from(new Set(items.map((item) => item.model))),
+        models: Array.from(new Map(items.map((item) => [item.model, { name: item.model, capability: item.capability }])).values()),
     }));
     const all = uniqueOptions(models.map((model) => encodeChannelModel(channelIdForProvider(channels, model.provider), model.model)).filter(Boolean));
     const byCapability = (capability: ModelCapability) => uniqueOptions(models.filter((model) => model.capability === capability && model.enabled).map((model) => encodeChannelModel(channelIdForProvider(channels, model.provider), model.model)));

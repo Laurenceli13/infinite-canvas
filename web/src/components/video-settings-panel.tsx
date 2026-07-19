@@ -25,6 +25,10 @@ const sizeOptions = [
 
 const secondOptions = [3, 5, 10, 18];
 
+export const videoResolutionOptions = resolutionOptions.map((item) => ({ value: item.value, label: item.label }));
+export const videoSizeOptions = sizeOptions.map((item) => ({ value: item.value, label: item.label }));
+export const videoSecondOptions = secondOptions.map((value) => String(value));
+
 type VideoSettingsPanelProps = {
     config: AiConfig;
     onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;

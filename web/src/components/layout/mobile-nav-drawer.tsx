@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { navigationToolLabel, navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
 import { useStudioLocaleStore } from "@/stores/use-studio-locale-store";
+import { isStudioManagedHost } from "@/services/studio-managed";
 
 type MobileNavDrawerProps = {
     open: boolean;
@@ -17,7 +18,7 @@ export function MobileNavDrawer({ open, activeToolSlug, onClose }: MobileNavDraw
     return (
         <Drawer title={locale === "zh" ? "导航" : "Navigation"} placement="left" size={280} open={open} onClose={onClose} className="md:hidden">
             <div className="space-y-1">
-                {navigationTools.map((tool) => {
+                {navigationTools.filter((tool) => !isStudioManagedHost() || tool.slug !== "config").map((tool) => {
                     const Icon = tool.icon;
                     const active = tool.slug === activeToolSlug;
                     return (

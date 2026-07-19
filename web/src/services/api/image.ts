@@ -19,10 +19,7 @@ export type ResponseToolCall = {
     thoughtSignature?: string;
 };
 
-export type ResponseInputMessage =
-    | AiTextMessage
-    | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string }
-    | { role: "tool"; tool_call_id: string; content: string };
+export type ResponseInputMessage = AiTextMessage | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string } | { role: "tool"; tool_call_id: string; content: string };
 
 export type ResponseFunctionTool = {
     type: "function";
@@ -42,10 +39,7 @@ export type ToolResponseResult = {
 type ToolChoice = "auto" | "required" | { type: "function"; name: string };
 type ResponseMessageContent = AiTextMessage["content"] | string;
 type ResponseInputContent = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
-type ResponseInputItem =
-    | { role: "system" | "user" | "assistant"; content: string | ResponseInputContent[] }
-    | { type: "function_call"; call_id: string; name: string; arguments: string }
-    | { type: "function_call_output"; call_id: string; output: string };
+type ResponseInputItem = { role: "system" | "user" | "assistant"; content: string | ResponseInputContent[] } | { type: "function_call"; call_id: string; name: string; arguments: string } | { type: "function_call_output"; call_id: string; output: string };
 type ResponseApiToolDefinition = {
     type: "function";
     name: string;
@@ -53,9 +47,7 @@ type ResponseApiToolDefinition = {
     parameters: Record<string, unknown>;
     strict?: boolean;
 };
-type ResponseApiOutputItem =
-    | { type?: "message"; content?: Array<{ type?: string; text?: string }> }
-    | { type?: "function_call"; id?: string; call_id?: string; name?: string; arguments?: string };
+type ResponseApiOutputItem = { type?: "message"; content?: Array<{ type?: string; text?: string }> } | { type?: "function_call"; id?: string; call_id?: string; name?: string; arguments?: string };
 type ResponseApiPayload = {
     id?: string;
     output?: ResponseApiOutputItem[];
@@ -67,8 +59,7 @@ type ResponseApiPayload = {
 type ResponseStreamState = { buffer: string; text: string; payload?: ResponseApiPayload; error?: string };
 type ChatCompletionContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
 type ChatCompletionMessage =
-    | { role: "system" | "user" | "assistant"; content: string | ChatCompletionContentPart[]; tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> }
-    | { role: "tool"; tool_call_id: string; content: string };
+    { role: "system" | "user" | "assistant"; content: string | ChatCompletionContentPart[]; tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> } | { role: "tool"; tool_call_id: string; content: string };
 type ChatCompletionToolDefinition = {
     type: "function";
     function: {
@@ -163,6 +154,8 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
+const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -230,6 +223,42 @@ function resolveRequestSize(quality: string | undefined, size: string) {
     }
     if (value.includes(":")) return resolveSize(quality, value);
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
+}
+
+function resolveGeminiImageConfig(config: AiConfig) {
+    const value = config.size.trim();
+    const dimensions = parseImageDimensions(value);
+    const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
+    const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
+    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions) : undefined;
+    const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
+    return Object.keys(image).length ? { responseFormat: { image } } : {};
+}
+
+function closestGeminiAspectRatio(value: string) {
+    const ratio = parseImageRatio(value);
+    const target = ratio.width / ratio.height;
+    return GEMINI_SUPPORTED_RATIOS.reduce((best, item) => {
+        const current = parseImageRatio(item);
+        const bestRatio = parseImageRatio(best);
+        return Math.abs(current.width / current.height - target) < Math.abs(bestRatio.width / bestRatio.height - target) ? item : best;
+    });
+}
+
+function resolveGeminiImageSize(quality: string, dimensions: { width: number; height: number } | null) {
+    const normalizedQuality = normalizeQuality(quality);
+    if (normalizedQuality) return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
+    if (!dimensions) return undefined;
+    const edge = Math.max(dimensions.width, dimensions.height);
+    if (edge <= 768) return "512";
+    if (edge <= 1536) return "1K";
+    if (edge <= 3072) return "2K";
+    return "4K";
+}
+
+function supportsGeminiImageSize(model: string) {
+    const value = model.toLowerCase();
+    return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro");
 }
 
 function resolveImageDataUrl(item: Record<string, unknown>) {
@@ -432,10 +461,11 @@ function geminiApiUrl(config: Pick<AiConfig, "baseUrl" | "model">, action?: "gen
     return `${baseUrl}/models/${encodeURIComponent(geminiModelName(config.model))}:${action}`;
 }
 
-function geminiHeaders(config: Pick<AiConfig, "apiKey">) {
+function geminiHeaders(config: Pick<AiConfig, "apiKey">, options?: RequestOptions) {
     return {
         "x-goog-api-key": config.apiKey,
         "Content-Type": "application/json",
+        ...(options?.requestId ? { "X-Studio-Generation-Id": options.requestId } : {}),
     };
 }
 
@@ -491,7 +521,9 @@ function toChatCompletionMessages(messages: ResponseInputMessage[]): ChatComplet
         }
         return {
             role: message.role,
-            content: Array.isArray(message.content) ? message.content.map((item) => (item.type === "text" ? { type: "text" as const, text: item.text } : { type: "image_url" as const, image_url: { url: item.image_url.url } })) : String(message.content || ""),
+            content: Array.isArray(message.content)
+                ? message.content.map((item) => (item.type === "text" ? { type: "text" as const, text: item.text } : { type: "image_url" as const, image_url: { url: item.image_url.url } }))
+                : String(message.content || ""),
         };
     });
 }
@@ -511,9 +543,7 @@ function toChatCompletionTools(tools: ResponseFunctionTool[]): ChatCompletionToo
 function chatContentText(content: string | ChatCompletionContentPart[] | null | undefined) {
     if (typeof content === "string") return content;
     if (!Array.isArray(content)) return "";
-    return content
-        .map((item) => (item.type === "text" ? item.text : ""))
-        .join("");
+    return content.map((item) => (item.type === "text" ? item.text : "")).join("");
 }
 
 function parseToolResponse(payload: ResponseApiPayload): ToolResponseResult {
@@ -691,7 +721,7 @@ function consumeChatCompletionStreamText(state: ChatCompletionStreamState, text:
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
     const response = await fetch(aiApiUrl(config, "/responses"), {
         method: "POST",
-        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+        headers: { ...requestHeaders(config, options, "application/json"), Accept: "text/event-stream" },
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
     });
@@ -722,7 +752,7 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
 async function requestChatCompletionsResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
     const response = await fetch(aiApiUrl(config, "/chat/completions"), {
         method: "POST",
-        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+        headers: { ...requestHeaders(config, options, "application/json"), Accept: "text/event-stream" },
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
     });
@@ -755,12 +785,7 @@ async function requestChatCompletionsResponse(config: AiConfig, body: Record<str
 }
 
 function toGeminiBody(config: AiConfig, messages: ResponseInputMessage[], extra?: Record<string, unknown>) {
-    const systemText = [
-        config.systemPrompt.trim(),
-        ...messages.flatMap((message) => (!("type" in message) && message.role === "system" ? [geminiTextContent(message.content)] : [])),
-    ]
-        .filter(Boolean)
-        .join("\n\n");
+    const systemText = [config.systemPrompt.trim(), ...messages.flatMap((message) => (!("type" in message) && message.role === "system" ? [geminiTextContent(message.content)] : []))].filter(Boolean).join("\n\n");
     const contents = toGeminiContents(messages.filter((message) => ("type" in message ? true : message.role !== "system")));
     return {
         contents,
@@ -820,10 +845,7 @@ function toGeminiToolOptions(tools: ResponseFunctionTool[], toolChoice: ToolChoi
         description: tool.function.description,
         parameters: tool.function.parameters,
     }));
-    const functionCallingConfig =
-        typeof toolChoice === "object"
-            ? { mode: "ANY", allowedFunctionNames: [toolChoice.name] }
-            : { mode: toolChoice === "required" ? "ANY" : "AUTO" };
+    const functionCallingConfig = typeof toolChoice === "object" ? { mode: "ANY", allowedFunctionNames: [toolChoice.name] } : { mode: toolChoice === "required" ? "ANY" : "AUTO" };
     return {
         tools: [{ functionDeclarations }],
         toolConfig: { functionCallingConfig },
@@ -833,7 +855,7 @@ function toGeminiToolOptions(tools: ResponseFunctionTool[], toolChoice: ToolChoi
 async function requestGeminiStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
     const response = await fetch(`${geminiApiUrl(config, "streamGenerateContent")}?alt=sse`, {
         method: "POST",
-        headers: geminiHeaders(config),
+        headers: geminiHeaders(config, options),
         body: JSON.stringify(body),
         signal: options?.signal,
     });
@@ -921,10 +943,10 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
     const response = await axios.post<GeminiPayload>(
         geminiApiUrl(config, "generateContent"),
         {
-            ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"] } }),
+            ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
             contents: [{ role: "user", parts }],
         },
-        { headers: geminiHeaders(config), signal: options?.signal },
+        { headers: geminiHeaders(config, options), signal: options?.signal },
     );
     return parseGeminiImagePayload(response.data);
 }
@@ -973,14 +995,10 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             const asyncImages = await createStudioAsyncImageJob(requestBody, "generations", options);
             if (asyncImages) return asyncImages;
         }
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            requestBody,
-            {
-                headers: requestHeaders(requestConfig, options, "application/json"),
-                signal: options?.signal,
-            },
-        );
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), requestBody, {
+            headers: requestHeaders(requestConfig, options, "application/json"),
+            signal: options?.signal,
+        });
         const images = parseImagePayload(response.data);
         return images;
     } catch (error) {
@@ -1020,14 +1038,10 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 const asyncImages = await createStudioAsyncImageJob(requestBody, "generations", options);
                 if (asyncImages) return asyncImages;
             }
-            const response = await axios.post<ImageApiResponse>(
-                aiApiUrl(requestConfig, "/images/generations"),
-                requestBody,
-                {
-                    headers: requestHeaders(requestConfig, options, "application/json"),
-                    signal: options?.signal,
-                },
-            );
+            const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), requestBody, {
+                headers: requestHeaders(requestConfig, options, "application/json"),
+                signal: options?.signal,
+            });
             return parseImagePayload(response.data);
         } catch (error) {
             throw new Error(enrichModelError(requestConfig, readAxiosError(error, "Request failed"), "image"));
@@ -1074,28 +1088,10 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
             if (answer === "未返回文本内容") onDelta(answer);
             return answer;
         }
-        const answer = (
-            await (prefersChatCompletions(requestConfig)
-                ? requestChatCompletionsResponse(
-                      requestConfig,
-                      {
-                          model: requestConfig.model,
-                          messages: toChatCompletionMessages(withSystemMessage(requestConfig, messages)),
-                      },
-                      onDelta,
-                      options,
-                  )
-                : requestStreamingResponse(
-                      requestConfig,
-                      {
-                          model: requestConfig.model,
-                          input: toResponseInput(withSystemMessage(requestConfig, messages)),
-                      },
-                      onDelta,
-                      options,
-                  ).catch((error) => {
-                      if (!shouldFallbackToChatCompletions(error)) throw error;
-                      return requestChatCompletionsResponse(
+        const answer =
+            (
+                await (prefersChatCompletions(requestConfig)
+                    ? requestChatCompletionsResponse(
                           requestConfig,
                           {
                               model: requestConfig.model,
@@ -1103,9 +1099,28 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
                           },
                           onDelta,
                           options,
-                      );
-                  }))
-        ).content || "未返回文本内容";
+                      )
+                    : requestStreamingResponse(
+                          requestConfig,
+                          {
+                              model: requestConfig.model,
+                              input: toResponseInput(withSystemMessage(requestConfig, messages)),
+                          },
+                          onDelta,
+                          options,
+                      ).catch((error) => {
+                          if (!shouldFallbackToChatCompletions(error)) throw error;
+                          return requestChatCompletionsResponse(
+                              requestConfig,
+                              {
+                                  model: requestConfig.model,
+                                  messages: toChatCompletionMessages(withSystemMessage(requestConfig, messages)),
+                              },
+                              onDelta,
+                              options,
+                          );
+                      }))
+            ).content || "未返回文本内容";
         if (answer === "未返回文本内容") onDelta(answer);
         return answer;
     } catch (error) {

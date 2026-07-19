@@ -434,12 +434,34 @@ export default function ImagePage() {
         };
     };
 
-    const retryResult = (index: number) => {
+    const retryResult = async (index: number) => {
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
         setPreviewLog(null);
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
-        void runGenerationSlot(index, snapshot).catch(() => {});
+        const retryStartedAt = performance.now();
+        try {
+            const image = await runGenerationSlot(index, snapshot);
+            const stored = await uploadImage(image.dataUrl);
+            const logImage = { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+            setResults((value) => updateResultAt(value, index, { image: { ...image, dataUrl: stored.url, storageKey: stored.storageKey } }));
+            saveLog(
+                buildLog({
+                    prompt: snapshot.text,
+                    model,
+                    config: { ...snapshot.config, count: "1" },
+                    references: snapshot.references,
+                    durationMs: performance.now() - retryStartedAt,
+                    successCount: 1,
+                    failCount: 0,
+                    status: "成功",
+                    images: [logImage],
+                }),
+            );
+            message.success(copy.generated);
+        } catch {
+            // runGenerationSlot already records the failed slot.
+        }
     };
 
     return (

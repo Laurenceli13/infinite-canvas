@@ -1,5 +1,6 @@
 import { createBrowserRouter, Outlet } from "react-router-dom";
 
+import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import AdminPage from "@/pages/admin";
 import AdminLoginPage from "@/pages/admin-login";
 import { StudioProtectedRoute, StudioPublicOnlyRoute } from "@/components/layout/studio-route-guards";
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
         element: (
             <StudioProtectedRoute>
                 <UserLayout>
+                    <AnalyticsTracker />
                     <Outlet />
                 </UserLayout>
             </StudioProtectedRoute>

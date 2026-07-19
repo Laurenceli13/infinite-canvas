@@ -17,7 +17,7 @@ import {
     refundStudioUsage,
     resetStudioUserConcurrency,
     updateStudioModel,
-    updateStudioDefaultConcurrency,
+    updateStudioConcurrencySettings,
     updateStudioProvider,
     updateStudioUsageReport,
     updateStudioUserConcurrency,
@@ -417,6 +417,7 @@ export default function AdminPage() {
 function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
     const { message } = App.useApp();
     const [config, setConfig] = useState<StudioConcurrencyConfig | null>(null);
+    const [globalDraft, setGlobalDraft] = useState(64);
     const [defaultDraft, setDefaultDraft] = useState(4);
     const [userDrafts, setUserDrafts] = useState<Record<string, number>>({});
     const [query, setQuery] = useState("");
@@ -429,6 +430,7 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
         try {
             const next = await fetchStudioConcurrency();
             setConfig(next);
+            setGlobalDraft(next.globalLimit);
             setDefaultDraft(next.defaultLimit);
             setUserDrafts(Object.fromEntries(next.users.map((user) => [userKey(user), user.overrideLimit ?? user.effectiveLimit])));
         } catch (error) {
@@ -446,15 +448,19 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
         const keyword = query.trim().toLowerCase();
         if (!keyword) return config?.users || [];
         return (config?.users || []).filter((user) =>
-            [user.source, user.userId, user.username, user.email, user.label].some((value) => String(value || "").toLowerCase().includes(keyword)),
+            [user.source, user.userId, user.username, user.email, user.label].some((value) =>
+                String(value || "")
+                    .toLowerCase()
+                    .includes(keyword),
+            ),
         );
     }, [config?.users, query]);
 
-    const saveDefault = async () => {
-        setSavingKey("default");
+    const saveDefaults = async () => {
+        setSavingKey("defaults");
         try {
-            await updateStudioDefaultConcurrency(defaultDraft);
-            message.success(locale === "zh" ? "全局默认并发已更新" : "Default concurrency updated");
+            await updateStudioConcurrencySettings(globalDraft, defaultDraft);
+            message.success(locale === "zh" ? "并发限制已更新" : "Concurrency limits updated");
             await load();
         } catch (error) {
             message.error(error instanceof Error ? error.message : locale === "zh" ? "保存失败" : "Save failed");
@@ -494,33 +500,40 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
     const maxLimit = config?.maxLimit || 64;
     return (
         <div className="space-y-4">
-            <Card title={locale === "zh" ? "Studio 全局默认并发" : "Studio default concurrency"}>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <Card title={locale === "zh" ? "Studio 并发总控" : "Studio concurrency control"}>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,220px)_minmax(0,220px)_auto] lg:items-end">
                     <div>
-                        <div className="mb-1 text-sm text-stone-500">{locale === "zh" ? "每个用户同时运行的生成任务数" : "Running generation jobs per user"}</div>
-                        <InputNumber min={1} max={maxLimit} precision={0} value={defaultDraft} onChange={(value) => setDefaultDraft(Number(value || 1))} />
+                        <div className="mb-1 text-sm text-stone-500">{locale === "zh" ? "全站同时运行任务总数" : "Total running jobs"}</div>
+                        <InputNumber className="w-full" min={1} max={config?.globalMaxLimit || 64} precision={0} value={globalDraft} onChange={(value) => setGlobalDraft(Number(value || 1))} />
                     </div>
-                    <Button type="primary" loading={savingKey === "default"} onClick={() => void saveDefault()}>
-                        {locale === "zh" ? "保存全局设置" : "Save default"}
+                    <div>
+                        <div className="mb-1 text-sm text-stone-500">{locale === "zh" ? "默认每用户同时运行任务数" : "Default running jobs per user"}</div>
+                        <InputNumber className="w-full" min={1} max={maxLimit} precision={0} value={defaultDraft} onChange={(value) => setDefaultDraft(Number(value || 1))} />
+                    </div>
+                    <Button type="primary" loading={savingKey === "defaults"} onClick={() => void saveDefaults()}>
+                        {locale === "zh" ? "保存统一设置" : "Save limits"}
                     </Button>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                    <Tag color="blue">{locale === "zh" ? `正在运行 ${config?.runningTotal || 0}` : `Running ${config?.runningTotal || 0}`}</Tag>
+                    <Tag>{locale === "zh" ? `排队 ${config?.queuedTotal || 0}` : `Queued ${config?.queuedTotal || 0}`}</Tag>
+                    <Tag>{locale === "zh" ? `执行器上限 ${config?.globalMaxLimit || 64}` : `Executor max ${config?.globalMaxLimit || 64}`}</Tag>
                 </div>
                 <p className="mt-3 text-sm text-stone-500">
                     {locale === "zh"
-                        ? "仅限制 Studio 用户的任务调度；不会修改 MassMore、Mtline 或 Cloudflare Worker 的并发设置。用户单独设置后优先使用用户值。"
-                        : "This only limits Studio job scheduling. It does not change MassMore, Mtline, or Cloudflare Worker concurrency. User overrides take priority."}
+                        ? "总上限保护服务器和传输链路；默认每用户上限统一应用于所有用户，单独设置后以用户值为准。这里只限制 Studio 调度，不修改 MassMore、Mtline 或现有 Cloudflare Worker。"
+                        : "The total cap protects the server and transport path. The per-user default applies to everyone unless overridden. This only controls Studio scheduling and does not modify MassMore, Mtline, or existing Cloudflare Workers."}
                 </p>
             </Card>
             <Card
                 title={locale === "zh" ? "用户并发覆盖" : "Per-user overrides"}
-                extra={<Button loading={loading} onClick={() => void load()}>{locale === "zh" ? "刷新" : "Refresh"}</Button>}
+                extra={
+                    <Button loading={loading} onClick={() => void load()}>
+                        {locale === "zh" ? "刷新" : "Refresh"}
+                    </Button>
+                }
             >
-                <Input.Search
-                    allowClear
-                    className="mb-4 max-w-md"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder={locale === "zh" ? "搜索来源、用户名、邮箱或用户 ID" : "Search source, username, email, or user ID"}
-                />
+                <Input.Search allowClear className="mb-4 max-w-md" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={locale === "zh" ? "搜索来源、用户名、邮箱或用户 ID" : "Search source, username, email, or user ID"} />
                 <Table<StudioConcurrencyUser>
                     rowKey={(user) => userKey(user)}
                     loading={loading}
@@ -532,7 +545,12 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
                         {
                             title: locale === "zh" ? "用户" : "User",
                             width: 250,
-                            render: (_, user) => <div><div className="font-medium">{user.username || user.email || user.userId}</div><div className="text-xs text-stone-500">{user.email || user.userId}</div></div>,
+                            render: (_, user) => (
+                                <div>
+                                    <div className="font-medium">{user.username || user.email || user.userId}</div>
+                                    <div className="text-xs text-stone-500">{user.email || user.userId}</div>
+                                </div>
+                            ),
                         },
                         { title: locale === "zh" ? "运行 / 排队" : "Running / queued", width: 130, render: (_, user) => `${user.running} / ${user.queued}` },
                         { title: locale === "zh" ? "当前上限" : "Effective", dataIndex: "effectiveLimit", width: 100 },
@@ -550,7 +568,16 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
                             fixed: "right",
                             render: (_, user) => {
                                 const key = userKey(user);
-                                return <Space><Button type="primary" loading={savingKey === key} onClick={() => void saveUser(user)}>{locale === "zh" ? "保存" : "Save"}</Button><Button disabled={user.overrideLimit == null} onClick={() => void resetUser(user)}>{locale === "zh" ? "恢复默认" : "Reset"}</Button></Space>;
+                                return (
+                                    <Space>
+                                        <Button type="primary" loading={savingKey === key} onClick={() => void saveUser(user)}>
+                                            {locale === "zh" ? "保存" : "Save"}
+                                        </Button>
+                                        <Button disabled={user.overrideLimit == null} onClick={() => void resetUser(user)}>
+                                            {locale === "zh" ? "恢复默认" : "Reset"}
+                                        </Button>
+                                    </Space>
+                                );
                             },
                         },
                     ]}
@@ -606,10 +633,7 @@ function WorkflowsTab({ locale }: { locale: StudioLocale }) {
     };
 
     return (
-        <Card
-            title={locale === "zh" ? "行业工作流开放范围" : "Industry workflow access"}
-            extra={<Button onClick={() => void load()}>{locale === "zh" ? "刷新" : "Refresh"}</Button>}
-        >
+        <Card title={locale === "zh" ? "行业工作流开放范围" : "Industry workflow access"} extra={<Button onClick={() => void load()}>{locale === "zh" ? "刷新" : "Refresh"}</Button>}>
             <Table
                 rowKey="key"
                 loading={loading}
@@ -1191,7 +1215,7 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
                         <Input />
                     </Form.Item>
                     <Form.Item name="capability" label={copy.capability}>
-                        <Select options={capabilityOptions.map((option) => ({ ...option, label: locale === "zh" ? ({ text: "文本", image: "图片", video: "视频", audio: "音频" }[option.value]) : option.label }))} />
+                        <Select options={capabilityOptions.map((option) => ({ ...option, label: locale === "zh" ? { text: "文本", image: "图片", video: "视频", audio: "音频" }[option.value] : option.label }))} />
                     </Form.Item>
                     <Form.Item name="creditCost" label={copy.creditCost}>
                         <InputNumber className="w-full" min={0} step={1} />
@@ -1230,7 +1254,7 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
                         { title: copy.columns.model, dataIndex: "model" },
                         { title: copy.columns.displayName, dataIndex: "displayName" },
                         { title: copy.columns.provider, dataIndex: "provider" },
-                        { title: copy.columns.capability, dataIndex: "capability", render: (value) => <Tag>{locale === "zh" ? ({ text: "文本", image: "图片", video: "视频", audio: "音频" }[value as ModelCapability] || value) : value}</Tag> },
+                        { title: copy.columns.capability, dataIndex: "capability", render: (value) => <Tag>{locale === "zh" ? { text: "文本", image: "图片", video: "视频", audio: "音频" }[value as ModelCapability] || value : value}</Tag> },
                         {
                             title: copy.columns.credits,
                             render: (_, item) => (
@@ -1249,14 +1273,7 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
                         },
                         {
                             title: copy.columns.enabled,
-                            render: (_, item) => (
-                                <Switch
-                                    checked={item.enabled}
-                                    disabled={!item.rowId}
-                                    loading={updatingModelKeys.includes(modelKeyFor(item))}
-                                    onChange={(enabled) => void toggleModelEnabled(item, enabled)}
-                                />
-                            ),
+                            render: (_, item) => <Switch checked={item.enabled} disabled={!item.rowId} loading={updatingModelKeys.includes(modelKeyFor(item))} onChange={(enabled) => void toggleModelEnabled(item, enabled)} />,
                         },
                         {
                             title: copy.columns.actions,
@@ -1280,19 +1297,7 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
     );
 }
 
-function ModelPricingEditor({
-    item,
-    rules,
-    disabled,
-    onPatch,
-    onSave,
-}: {
-    item: StudioModel;
-    rules: StudioPricingRules;
-    disabled: boolean;
-    onPatch: (path: string[], patch: Partial<PricingEntry>) => void;
-    onSave: () => void;
-}) {
+function ModelPricingEditor({ item, rules, disabled, onPatch, onSave }: { item: StudioModel; rules: StudioPricingRules; disabled: boolean; onPatch: (path: string[], patch: Partial<PricingEntry>) => void; onSave: () => void }) {
     if (item.capability !== "image" && item.capability !== "video") {
         return <div className="rounded-xl bg-stone-50 p-4 text-sm text-stone-500">文本和音频模型使用上方统一积分；图片/视频模型可在这里配置不同规格积分。</div>;
     }
@@ -1300,14 +1305,7 @@ function ModelPricingEditor({
         <div className="grid gap-4 rounded-xl bg-stone-50 p-4 md:grid-cols-2">
             {item.capability === "image" ? (
                 <>
-                    <PricingGroup
-                        title="图片质量积分"
-                        hint="用户选择“自动”时按“中”质量扣费。"
-                        items={imageQualityItems}
-                        entries={rules.image?.quality || {}}
-                        disabled={disabled}
-                        onPatch={(option, patch) => onPatch(["image", "quality", option], patch)}
-                    />
+                    <PricingGroup title="图片质量积分" hint="用户选择“自动”时按“中”质量扣费。" items={imageQualityItems} entries={rules.image?.quality || {}} disabled={disabled} onPatch={(option, patch) => onPatch(["image", "quality", option], patch)} />
                     <PricingGroup
                         title="图片尺寸积分"
                         hint="用户选择 auto 时按 2K 扣费；最终图片单价 = 质量积分 + 尺寸积分。"
@@ -1447,13 +1445,44 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
             }
         >
             <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[130px_1fr_1.2fr_1fr_1.5fr_auto]">
-                <Select allowClear placeholder={locale === "zh" ? "来源" : "Source"} value={filters.source || undefined} options={[{ value: "massmore", label: "MassMore" }, { value: "mtline", label: "Mtline" }, { value: "studio", label: "Studio" }]} onChange={(source) => setFilters((current) => ({ ...current, source: source || "" }))} />
+                <Select
+                    allowClear
+                    placeholder={locale === "zh" ? "来源" : "Source"}
+                    value={filters.source || undefined}
+                    options={[
+                        { value: "massmore", label: "MassMore" },
+                        { value: "mtline", label: "Mtline" },
+                        { value: "studio", label: "Studio" },
+                    ]}
+                    onChange={(source) => setFilters((current) => ({ ...current, source: source || "" }))}
+                />
                 <Input allowClear placeholder={locale === "zh" ? "用户名或邮箱" : "User or email"} value={filters.user} onChange={(event) => setFilters((current) => ({ ...current, user: event.target.value }))} onPressEnter={() => void load()} />
-                <Select allowClear showSearch optionFilterProp="label" placeholder={locale === "zh" ? "模型" : "Model"} value={filters.model || undefined} options={modelOptions} onChange={(model) => setFilters((current) => ({ ...current, model: model || "" }))} />
-                <Select allowClear placeholder={locale === "zh" ? "能力" : "Capability"} value={filters.capability || undefined} options={[{ value: "text", label: locale === "zh" ? "文字" : "Text" }, { value: "image", label: locale === "zh" ? "图片" : "Image" }, { value: "video", label: locale === "zh" ? "视频" : "Video" }, { value: "audio", label: locale === "zh" ? "音频" : "Audio" }]} onChange={(capability) => setFilters((current) => ({ ...current, capability: capability || "" }))} />
+                <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder={locale === "zh" ? "模型" : "Model"}
+                    value={filters.model || undefined}
+                    options={modelOptions}
+                    onChange={(model) => setFilters((current) => ({ ...current, model: model || "" }))}
+                />
+                <Select
+                    allowClear
+                    placeholder={locale === "zh" ? "能力" : "Capability"}
+                    value={filters.capability || undefined}
+                    options={[
+                        { value: "text", label: locale === "zh" ? "文字" : "Text" },
+                        { value: "image", label: locale === "zh" ? "图片" : "Image" },
+                        { value: "video", label: locale === "zh" ? "视频" : "Video" },
+                        { value: "audio", label: locale === "zh" ? "音频" : "Audio" },
+                    ]}
+                    onChange={(capability) => setFilters((current) => ({ ...current, capability: capability || "" }))}
+                />
                 <DatePicker.RangePicker className="w-full" showTime onChange={(range) => setFilters((current) => ({ ...current, range: [range?.[0]?.unix(), range?.[1]?.unix()] }))} />
                 <Space>
-                    <Button type="primary" onClick={() => void load()}>{locale === "zh" ? "筛选" : "Filter"}</Button>
+                    <Button type="primary" onClick={() => void load()}>
+                        {locale === "zh" ? "筛选" : "Filter"}
+                    </Button>
                     <Button onClick={reset}>{locale === "zh" ? "重置" : "Reset"}</Button>
                 </Space>
             </div>
@@ -1482,7 +1511,41 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
                         render: (_, item) => {
                             const detail = [item.error, item.report_note ? `${locale === "zh" ? "用户备注" : "User note"}: ${item.report_note}` : ""].filter(Boolean).join("\n");
                             const canRefund = item.report_status === "open" && ["massmore", "mtline"].includes(item.source) && Number(item.credits || 0) > 0 && item.admin_refund_status !== "processing" && item.admin_refund_status !== "completed";
-                            return detail || item.report_status ? <div className="flex min-w-0 items-center gap-1"><Tooltip title={detail || undefined}><span className="min-w-0 flex-1 truncate">{item.admin_refund_status === "completed" ? <Tag color="green">{locale === "zh" ? `已返还 ${formatNumber(item.admin_refund_credits)} 积分` : `Refunded ${formatNumber(item.admin_refund_credits)}`}</Tag> : item.report_status === "open" ? <Tag color="orange">{locale === "zh" ? "待处理" : "Open"}</Tag> : item.report_status === "resolved" ? <Tag color="green">{locale === "zh" ? "已处理" : "Resolved"}</Tag> : null}{detail}</span></Tooltip>{canRefund ? <Popconfirm title={locale === "zh" ? `确认返还本次实际扣除的 ${formatNumber(item.credits)} 积分？` : `Refund ${formatNumber(item.credits)} credits for this usage?`} okText={locale === "zh" ? "确认返还" : "Refund"} cancelText={locale === "zh" ? "取消" : "Cancel"} onConfirm={() => void refundUsage(item)}><Button size="small" type="primary" loading={refundingUsage === item.external_key}>{locale === "zh" ? "返还积分" : "Refund"}</Button></Popconfirm> : null}{item.report_status === "open" ? <Button size="small" loading={resolvingReport === item.external_key} onClick={() => void resolveReport(item)}>{locale === "zh" ? "完成" : "Resolve"}</Button> : null}</div> : "-";
+                            return detail || item.report_status ? (
+                                <div className="flex min-w-0 items-center gap-1">
+                                    <Tooltip title={detail || undefined}>
+                                        <span className="min-w-0 flex-1 truncate">
+                                            {item.admin_refund_status === "completed" ? (
+                                                <Tag color="green">{locale === "zh" ? `已返还 ${formatNumber(item.admin_refund_credits)} 积分` : `Refunded ${formatNumber(item.admin_refund_credits)}`}</Tag>
+                                            ) : item.report_status === "open" ? (
+                                                <Tag color="orange">{locale === "zh" ? "待处理" : "Open"}</Tag>
+                                            ) : item.report_status === "resolved" ? (
+                                                <Tag color="green">{locale === "zh" ? "已处理" : "Resolved"}</Tag>
+                                            ) : null}
+                                            {detail}
+                                        </span>
+                                    </Tooltip>
+                                    {canRefund ? (
+                                        <Popconfirm
+                                            title={locale === "zh" ? `确认返还本次实际扣除的 ${formatNumber(item.credits)} 积分？` : `Refund ${formatNumber(item.credits)} credits for this usage?`}
+                                            okText={locale === "zh" ? "确认返还" : "Refund"}
+                                            cancelText={locale === "zh" ? "取消" : "Cancel"}
+                                            onConfirm={() => void refundUsage(item)}
+                                        >
+                                            <Button size="small" type="primary" loading={refundingUsage === item.external_key}>
+                                                {locale === "zh" ? "返还积分" : "Refund"}
+                                            </Button>
+                                        </Popconfirm>
+                                    ) : null}
+                                    {item.report_status === "open" ? (
+                                        <Button size="small" loading={resolvingReport === item.external_key} onClick={() => void resolveReport(item)}>
+                                            {locale === "zh" ? "完成" : "Resolve"}
+                                        </Button>
+                                    ) : null}
+                                </div>
+                            ) : (
+                                "-"
+                            );
                         },
                     },
                 ]}
@@ -1495,18 +1558,7 @@ function formatUsageQuantity(item: StudioUsage, locale: StudioLocale) {
     const unitCount = Number(item.unit_count || 1);
     const successCount = Number(item.success_count || 0);
     const failedCount = Number(item.failed_count || 0);
-    const unit =
-        item.capability === "image"
-            ? locale === "zh"
-                ? "张"
-                : "images"
-            : item.capability === "video"
-              ? locale === "zh"
-                  ? "秒"
-                  : "sec"
-              : locale === "zh"
-                ? "次"
-                : "calls";
+    const unit = item.capability === "image" ? (locale === "zh" ? "张" : "images") : item.capability === "video" ? (locale === "zh" ? "秒" : "sec") : locale === "zh" ? "次" : "calls";
     const base = `${unitCount} ${unit}`;
     if (!successCount && !failedCount) return base;
     return `${base} / ${locale === "zh" ? "成功" : "ok"} ${successCount}, ${locale === "zh" ? "失败" : "failed"} ${failedCount}`;

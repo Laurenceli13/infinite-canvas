@@ -2,9 +2,10 @@ import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { App } from "antd";
 
+import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
+import { usePromptSourceScheduler } from "@/hooks/use-prompt-source-scheduler";
 import { catalogToConfigPatch, fetchStudioCatalog, isStudioManagedHost, studioSelf } from "@/services/studio-managed";
 import { useStudioSessionStore } from "@/stores/use-studio-session-store";
-import { createModelChannel, normalizeControlledBaseUrl, useConfigStore } from "@/stores/use-config-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -18,11 +19,16 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const setStudioUser = useStudioSessionStore((state) => state.setUser);
     const setBootstrapped = useStudioSessionStore((state) => state.setBootstrapped);
 
+    usePromptSourceScheduler();
+
     useEffect(() => {
         if (handledConfigParams.current) return;
+        if (isStudioManagedHost()) {
+            handledConfigParams.current = true;
+            return;
+        }
         const searchParams = new URLSearchParams(window.location.search);
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
-        const controlledBaseUrl = baseUrl ? normalizeControlledBaseUrl(baseUrl) : "";
         const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
         if (!baseUrl && !apiKey) return;
         handledConfigParams.current = true;
@@ -39,14 +45,14 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                       index === 0
                           ? {
                                 ...channel,
-                                ...(controlledBaseUrl ? { baseUrl: controlledBaseUrl } : {}),
+                                ...(baseUrl ? { baseUrl } : {}),
                                 ...(apiKey ? { apiKey } : {}),
                             }
                           : channel,
                   )
-                : [createModelChannel({ id: "default", name: "默认渠道", baseUrl: controlledBaseUrl || undefined, apiKey: apiKey || "" })],
+                : [createModelChannel({ id: "default", name: "默认渠道", baseUrl: baseUrl || undefined, apiKey: apiKey || "" })],
         );
-        if (controlledBaseUrl) updateConfig("baseUrl", controlledBaseUrl);
+        if (baseUrl) updateConfig("baseUrl", baseUrl);
         if (apiKey) updateConfig("apiKey", apiKey);
         openConfigDialog(false);
         message.success("已导入本地直连配置");
@@ -64,10 +70,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             try {
                 const models = await fetchStudioCatalog();
                 if (cancelled) return;
-                const patch = catalogToConfigPatch(config, models);
-                (Object.keys(patch) as Array<keyof typeof patch>).forEach((key) => {
-                    updateConfig(key as never, patch[key] as never);
-                });
+                const patch = catalogToConfigPatch(useConfigStore.getState().config, models);
+                for (const [key, value] of Object.entries(patch)) {
+                    updateConfig(key as keyof typeof patch as never, value as never);
+                }
             } catch {
                 if (!cancelled) message.warning("模型目录加载较慢，请稍后刷新或联系管理员检查 Studio 后端。");
             }
@@ -88,7 +94,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         return () => {
             cancelled = true;
         };
-    }, [config, message, setBootstrapped, setStudioUser, updateConfig]);
+    }, [message, setBootstrapped, setStudioUser, updateConfig]);
 
     useEffect(() => {
         if (!isStudioManagedHost() || !bootstrapped || !studioUser) return;
@@ -100,9 +106,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                 .then((user) => {
                     if (!cancelled) setStudioUser(user);
                 })
-                .catch(() => {
-                    // Keep the existing UI state if a background refresh is temporarily unavailable.
-                })
+                .catch(() => undefined)
                 .finally(() => {
                     refreshPromise = null;
                 });
@@ -111,16 +115,15 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         const onVisibility = () => {
             if (document.visibilityState === "visible") void syncSession();
         };
-        const onFocus = () => void syncSession();
         const timer = window.setInterval(() => {
             if (document.visibilityState === "visible") void syncSession();
         }, 30000);
-        window.addEventListener("focus", onFocus);
+        window.addEventListener("focus", syncSession);
         document.addEventListener("visibilitychange", onVisibility);
         return () => {
             cancelled = true;
             window.clearInterval(timer);
-            window.removeEventListener("focus", onFocus);
+            window.removeEventListener("focus", syncSession);
             document.removeEventListener("visibilitychange", onVisibility);
         };
     }, [bootstrapped, setStudioUser, studioUser?.id, studioUser?.source]);

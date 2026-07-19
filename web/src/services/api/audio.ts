@@ -4,16 +4,17 @@ import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, nor
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, isGeminiFormat, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; requestId?: string };
 
 function aiApiUrl(config: AiConfig, path: string) {
     return buildApiUrl(config.baseUrl, path);
 }
 
-function aiHeaders(config: AiConfig) {
+function aiHeaders(config: AiConfig, options?: RequestOptions) {
     return {
         Authorization: `Bearer ${config.apiKey}`,
         "Content-Type": "application/json",
+        ...(options?.requestId ? { "X-Studio-Generation-Id": options.requestId } : {}),
     };
 }
 
@@ -35,7 +36,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { headers: aiHeaders(requestConfig), responseType: "blob", signal: options?.signal },
+            { headers: aiHeaders(requestConfig, options), responseType: "blob", signal: options?.signal },
         );
         await assertAudioBlob(response.data);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });

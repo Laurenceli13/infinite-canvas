@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { BookOpen, History, Keyboard, LogOut, Settings2, Shield } from "lucide-react";
+import { BookOpen, History, Keyboard, LogOut, Puzzle, Settings2, Shield } from "lucide-react";
 import { App, Button, Tag } from "antd";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -19,9 +19,10 @@ type UserStatusActionsProps = {
     showConfig?: boolean;
     variant?: "default" | "canvas";
     onOpenShortcuts?: () => void;
+    onOpenPlugins?: () => void;
 };
 
-export function UserStatusActions({ showConfig = true, variant = "default", onOpenShortcuts }: UserStatusActionsProps) {
+export function UserStatusActions({ showConfig = true, variant = "default", onOpenShortcuts, onOpenPlugins }: UserStatusActionsProps) {
     const { message } = App.useApp();
     const navigate = useNavigate();
     const theme = useThemeStore((state) => state.theme);
@@ -146,6 +147,11 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
 
     return (
         <div className="inline-flex shrink-0 items-center gap-1">
+            {onOpenPlugins && !isStudioManagedHost() ? (
+                <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenPlugins} aria-label="节点插件" title="节点插件">
+                    <Puzzle className="size-4" />
+                </button>
+            ) : null}
             {isStudioManagedHost() && studioUser ? (
                 <div
                     className={cn(
@@ -226,7 +232,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
             <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={text.docs} title={text.docs}>
                 <BookOpen className="size-4" />
             </a>
-            {showConfig ? (
+            {showConfig && !isStudioManagedHost() ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => openConfigDialog(false)} aria-label={text.settings} title={text.settings}>
                     <Settings2 className="size-4" />
                 </button>

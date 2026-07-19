@@ -18,7 +18,7 @@ type SeedanceTask = {
 };
 type AgnesVideoPayload = Record<string, unknown>;
 type ApiEnvelope<T> = T | { code?: number; data?: T | null; msg?: string };
-type RequestOptions = { signal?: AbortSignal; requestId?: string };
+type RequestOptions = { signal?: AbortSignal; requestId?: string; onTaskCreated?: (task: VideoGenerationTask) => void };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "agnes"; model: string };
@@ -61,6 +61,7 @@ function requestHeaders(config: AiConfig, options?: RequestOptions, contentType?
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
+    options?.onTaskCreated?.(task);
     const delayMs = task.provider === "seedance" ? 5000 : task.provider === "agnes" ? 8000 : 2500;
     for (let attempt = 0; attempt < 120; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
