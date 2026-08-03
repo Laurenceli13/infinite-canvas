@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { apiFormatLabel, buildApiUrl, isGeminiFormat, resolveModelRequestConfig, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { apiFormatLabel, buildApiUrl, isGeminiFormat, isStudioManagedRuntime, resolveModelRequestConfig, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
@@ -358,7 +358,7 @@ function withSystemPrompt(config: AiConfig, prompt: string) {
 function isStudioAgnesProxyConfig(config: Pick<AiConfig, "apiFormat" | "apiKey">) {
     if (!isAgnesFormat(config)) return false;
     if (typeof window === "undefined") return false;
-    return window.location.hostname.toLowerCase() === "studio.massmore.org" && !String(config.apiKey || "").trim();
+    return isStudioManagedRuntime() && !String(config.apiKey || "").trim();
 }
 
 function studioAgnesProxyUrl(path: string) {
@@ -371,7 +371,7 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function usesStudioAsyncImages(config: AiConfig) {
-    return typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org" && !isGeminiFormat(config.apiFormat);
+    return isStudioManagedRuntime() && !isGeminiFormat(config.apiFormat);
 }
 
 function studioJobIdempotencyKey(options?: RequestOptions) {

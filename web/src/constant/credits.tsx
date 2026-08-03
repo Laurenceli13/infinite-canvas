@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { Zap } from "lucide-react";
-import { type ModelCapability } from "@/stores/use-config-store";
+import { isStudioManagedRuntime, type ModelCapability } from "@/stores/use-config-store";
 import { pricingRuleUnitCost, type StudioPricingRules } from "@/lib/studio-pricing";
 
 export function CreditSymbol({ className, ...props }: ComponentProps<"span">) {
@@ -23,7 +23,7 @@ export function requestCreditUnits(options: { capability: ModelCapability; count
 }
 
 export function requestCreditCost(options: { channelMode: string; modelCosts?: ModelCreditCost[]; modelPricingRules?: Array<{ model: string; rules: StudioPricingRules }>; model: string; capability?: ModelCapability; count?: string | number; seconds?: string | number; quality?: string; size?: string; imageResolution?: string; vquality?: string }) {
-    const isStudioManaged = typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
+    const isStudioManaged = isStudioManagedRuntime();
     const hasManagedPricing = Boolean(options.modelCosts?.length || options.modelPricingRules?.length);
     if (options.channelMode !== "remote" && !isStudioManaged && !hasManagedPricing) return 0;
     const capability = options.capability || "image";

@@ -421,7 +421,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                     const dataUrl = await readDataUrl(file);
                     const url = URL.createObjectURL(file);
                     attachmentUrlsRef.current.add(url);
-                    return { id: createId(), name: file.name, type: file.type, size: file.size, url, dataUrl };
+                    return { id: createId(), name: file.name, type: file.type, size: file.size, width: 0, height: 0, url, dataUrl };
                 }),
             );
             const merged = [...prev, ...next];
@@ -698,7 +698,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                     { value: "history", label: "历史", icon: <History className="size-3.5" />, count: threads.length },
                     { value: "log", label: "日志", icon: <Terminal className="size-3.5" />, count: eventLogs.length },
                 ]}
-                onChange={(activeTab) => {
+                onChange={(activeTab: AgentPanelTab) => {
                     setAgentState({ activeTab });
                     if (activeTab === "history") void loadThreads();
                 }}
@@ -771,7 +771,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                         sending={sending || waiting}
                         placeholder={studioChatMode ? "向 Studio 助手提问" : "询问 Codex，或让它操作网站/画布"}
                         theme={theme}
-                        onPromptChange={(prompt) => setAgentState({ prompt })}
+                        onPromptChange={(prompt: string) => setAgentState({ prompt })}
                         onSubmit={sendPrompt}
                         onStop={stopTurn}
                         onAddFiles={addAttachments}

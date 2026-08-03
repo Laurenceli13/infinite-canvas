@@ -1,6 +1,7 @@
 import { registerNodeDefinitions, unregisterPluginNodes } from "@/lib/canvas/node-registry";
 import { getPluginRuntime } from "@/lib/canvas/plugin-runtime";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
+import { isStudioManagedRuntime } from "@/stores/use-config-store";
 import type { CanvasPlugin } from "@/types/canvas-plugin";
 
 const cleanups = new Map<string, () => void>();
@@ -59,7 +60,7 @@ function withCacheBust(url: string) {
 // bustCache=true 时下载绕过 HTTP/CDN 缓存(升级场景必需,避免拿到旧产物),
 // 但落库的 url 始终保持干净(不带 ?t=),便于后续再次更新。
 export async function installPluginFromUrl(url: string, opts?: { official?: boolean; bustCache?: boolean }) {
-    if (typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org") {
+    if (isStudioManagedRuntime()) {
         throw new Error("Studio 工作台不允许安装远程插件");
     }
     const source = await fetchPluginSource(opts?.bustCache ? withCacheBust(url) : url);
@@ -76,7 +77,7 @@ export async function updatePlugin(record: InstalledPlugin) {
 }
 
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
-    if (typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org") {
+    if (isStudioManagedRuntime()) {
         throw new Error("Studio 工作台不允许启用或执行插件");
     }
     usePluginStore.getState().setEnabled(record.id, enabled);
@@ -99,7 +100,7 @@ let loaded = false;
 
 // 应用启动时加载已安装且启用的插件
 export async function ensurePluginsLoaded() {
-    if (typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org") return;
+    if (isStudioManagedRuntime()) return;
     if (loaded) return;
     loaded = true;
     await usePluginStore.persist.rehydrate();

@@ -7,6 +7,7 @@ import type { StudioPricingRules } from "@/lib/studio-pricing";
 export type ApiCallFormat =
     | "openai"
     | "gemini"
+    | "ark"
     | "agnes"
     | "grok"
     | "seedance"
@@ -21,6 +22,7 @@ export type ApiCallFormat =
     | "happyhors";
 export type ApiProtocol = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
 export type ChannelModel = {
     name: string;
@@ -53,6 +55,7 @@ export type AiConfig = {
     audioFormat: string;
     audioSpeed: string;
     audioInstructions: string;
+    reasoningEffort: ReasoningEffort;
     videoSeconds: string;
     vquality: string;
     videoGenerateAudio: string;
@@ -90,6 +93,7 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const API_FORMAT_OPTIONS: Array<{ label: string; value: ApiCallFormat }> = [
     { label: "OpenAI", value: "openai" },
     { label: "Gemini", value: "gemini" },
+    { label: "火山方舟", value: "ark" },
     { label: "Agnes", value: "agnes" },
     { label: "Grok", value: "grok" },
     { label: "Seedance", value: "seedance" },
@@ -138,6 +142,7 @@ export const defaultConfig: AiConfig = {
     audioFormat: "mp3",
     audioSpeed: "1",
     audioInstructions: "",
+    reasoningEffort: "auto",
     videoSeconds: "6",
     vquality: "720",
     videoGenerateAudio: "true",
@@ -208,6 +213,14 @@ export function modelCapabilityOf(config: AiConfig, value: string): ModelCapabil
 export function modelMatchesCapability(config: AiConfig, value: string, capability?: ModelCapability) {
     if (!capability) return true;
     return modelCapabilityOf(config, value) === capability;
+}
+
+export function resolveModelForCapability(config: AiConfig, currentModel: string | undefined, capability: ModelCapability) {
+    const defaultModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
+    const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
+    if (currentModel && modelMatchesCapability(config, currentModel, capability)) return currentModel;
+    if (defaultModel && modelMatchesCapability(config, defaultModel, capability)) return defaultModel;
+    return fallbackModel;
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
@@ -474,7 +487,8 @@ export function apiFormatLabel(apiFormat: ApiCallFormat) {
 }
 
 export function isStudioManagedRuntime() {
-    return typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
+    if (typeof window === "undefined") return false;
+    return ["studio.massmore.org", "studio.linkfoai.com"].includes(window.location.hostname.toLowerCase());
 }
 
 function normalizeConfiguredBaseUrl(baseUrl: string) {

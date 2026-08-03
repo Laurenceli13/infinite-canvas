@@ -169,7 +169,8 @@ export type StudioProviderPayload = {
 };
 
 export function isStudioManagedHost() {
-    return typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
+    if (typeof window === "undefined") return false;
+    return ["studio.massmore.org", "studio.linkfoai.com"].includes(window.location.hostname.toLowerCase());
 }
 
 export function studioApi(path: string) {
@@ -355,7 +356,7 @@ export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): 
     const channels: ModelChannel[] = Array.from(providerGroups.entries()).map(([provider, items], index) => ({
         id: `studio-${index + 1}`,
         name: provider,
-        baseUrl: "https://studio.massmore.org",
+        baseUrl: typeof window !== "undefined" ? window.location.origin : "https://studio.massmore.org",
         apiKey: "studio-managed",
         apiFormat: items[0]?.apiFormat || "openai",
         models: Array.from(new Map(items.map((item) => [item.model, { name: item.model, displayName: item.displayName, capability: item.capability }])).values()),
@@ -368,7 +369,7 @@ export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): 
     const audioModels = byCapability("audio");
     return {
         channels,
-        baseUrl: "https://studio.massmore.org",
+        baseUrl: typeof window !== "undefined" ? window.location.origin : "https://studio.massmore.org",
         apiKey: "studio-managed",
         apiFormat: channels[0]?.apiFormat || "openai",
         models: all,

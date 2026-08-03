@@ -4,7 +4,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, isGeminiFormat, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isGeminiFormat, isStudioManagedRuntime, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -31,7 +31,7 @@ function isAgnesVideoFormat(config: Pick<AiConfig, "apiFormat">) {
 function isStudioAgnesProxyConfig(config: Pick<AiConfig, "apiFormat" | "apiKey">) {
     if (!isAgnesVideoFormat(config)) return false;
     if (typeof window === "undefined") return false;
-    return window.location.hostname.toLowerCase() === "studio.massmore.org" && !String(config.apiKey || "").trim();
+    return isStudioManagedRuntime() && !String(config.apiKey || "").trim();
 }
 
 function studioAgnesProxyUrl(path: string) {
@@ -339,7 +339,7 @@ async function videoResultFromUrl(url: string, options?: RequestOptions): Promis
 async function videoResultFromTask(config: AiConfig, taskId: string, options?: RequestOptions, fallbackUrl?: string): Promise<VideoGenerationResult> {
     // Studio owns the task and retrieves completed videos through its signed,
     // same-origin asset route. Other deployments retain their direct provider flow.
-    const isStudioManaged = typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
+    const isStudioManaged = isStudioManagedRuntime();
     if (!isStudioManaged) {
         if (!fallbackUrl) {
             const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${taskId}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
