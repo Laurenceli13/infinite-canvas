@@ -72,6 +72,7 @@ export type CanvasNodeMetadata = {
     asyncJobId?: string;
     asyncJobStatus?: "queued" | "running" | "succeeded" | "failed" | "refund_failed" | "cancelled";
     asyncJobQueuePosition?: number;
+    asyncResultReady?: boolean;
     videoTaskId?: string;
     videoTaskProvider?: "openai" | "seedance" | "agnes";
     videoTaskStatus?: "pending" | "failed";

@@ -129,6 +129,7 @@ export type StudioAsyncJob = {
     error?: string;
     resultReady?: boolean;
     resultUrl?: string;
+    previewUrls?: string[];
     queueAhead?: number | null;
     queuePosition?: number | null;
 };
@@ -405,7 +406,8 @@ export async function fetchStudioAsyncImageJob(jobId: string) {
     // Some embedded Chromium clients close idle requests after roughly 15 seconds.
     // Finish before that boundary so a normal poll never turns into a client-side 499.
     const response = await axios.get<{ job: StudioAsyncJob }>(`/studio-api/jobs/${encodeURIComponent(jobId)}?wait=10`, { timeout: 20000 });
-    return response.data.job;
+    const job = response.data.job;
+    return { ...job, previewUrls: job.previewUrls?.map(rewriteHostedImageUrl) };
 }
 
 function notifyStudioAsyncImageJobWaiter(waiter: StudioAsyncImageJobWaiter, job: StudioAsyncJob) {

@@ -353,6 +353,7 @@ async function prepareGeneratedImageNode(dataUrl: string) {
             metadata: {
                 content: dataUrl,
                 status: NODE_STATUS_SUCCESS,
+                asyncResultReady: undefined,
                 naturalWidth: meta.width,
                 naturalHeight: meta.height,
                 mimeType: meta.mimeType,
@@ -620,14 +621,44 @@ function InfiniteCanvasPage() {
     const syncAsyncGenerationJobStatus = useCallback((targetNodeId: string, job: StudioAsyncJob) => {
         setNodes((prev) =>
             prev.map((node) =>
-                node.id === targetNodeId && node.metadata?.asyncJobId === job.jobId && !node.metadata?.content
+                node.id === targetNodeId && node.metadata?.asyncJobId === job.jobId
                     ? {
                           ...node,
+                          type: job.previewUrls?.[0] ? CanvasNodeType.Image : node.type,
                           metadata: {
                               ...node.metadata,
+                              ...(job.previewUrls?.[0]
+                                  ? {
+                                        content: job.previewUrls[0],
+                                        storageKey: undefined,
+                                        asyncResultReady: true,
+                                    }
+                                  : {}),
                               asyncJobStatus: job.status,
                               asyncJobQueuePosition: job.status === "queued" ? job.queuePosition || undefined : undefined,
                               status: NODE_STATUS_LOADING,
+                              errorDetails: undefined,
+                          },
+                      }
+                    : node,
+            ),
+        );
+    }, []);
+
+    const showGeneratedImagePreview = useCallback((targetNodeId: string, previewUrl: string) => {
+        if (!previewUrl) return;
+        setNodes((prev) =>
+            prev.map((node) =>
+                node.id === targetNodeId
+                    ? {
+                          ...node,
+                          type: CanvasNodeType.Image,
+                          metadata: {
+                              ...node.metadata,
+                              content: previewUrl,
+                              storageKey: undefined,
+                              status: NODE_STATUS_LOADING,
+                              asyncResultReady: true,
                               errorDetails: undefined,
                           },
                       }
@@ -685,6 +716,7 @@ function InfiniteCanvasPage() {
 
                 const images = await waitForStudioAsyncImageJob(jobId, { onAsyncJobStatus: (job) => syncAsyncGenerationJobStatus(nodeId, job) });
                 const image = images[0];
+                if (image) showGeneratedImagePreview(nodeId, image.dataUrl);
                 if (!image) throw new Error("异步任务没有返回图片");
                 const currentNode = nodesRef.current.find((item) => item.id === nodeId);
                 if (!currentNode || (currentNode.metadata?.asyncJobId && currentNode.metadata.asyncJobId !== jobId)) return;
@@ -743,7 +775,7 @@ function InfiniteCanvasPage() {
                 recoveringAsyncJobsRef.current.delete(jobId);
             }
         },
-        [message, syncAsyncGenerationJobStatus],
+        [message, showGeneratedImagePreview, syncAsyncGenerationJobStatus],
     );
 
     const attachVideoGenerationTask = useCallback(
@@ -2370,11 +2402,12 @@ function InfiniteCanvasPage() {
                     prompt,
                     [source],
                     { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl },
-                    { signal: controller.signal, requestId: generationRequestId(childId, controller), onAsyncJobCreated: (jobId) => attachAsyncGenerationJob(childId, controller, jobId) },
+                    { signal: controller.signal, requestId: generationRequestId(childId, controller), onAsyncJobCreated: (jobId) => attachAsyncGenerationJob(childId, controller, jobId), onAsyncJobStatus: (job) => syncAsyncGenerationJobStatus(childId, job) },
                 ).then((items) => items[0]);
-                const uploaded = await uploadImage(image.dataUrl);
-                const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata, asyncJobId: undefined } } : item)));
+                showGeneratedImagePreview(childId, image.dataUrl);
+                const prepared = await prepareGeneratedImageNode(image.dataUrl);
+                const size = fitNodeSize(prepared.width, prepared.height, node.width, node.height);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...prepared.metadata, prompt, ...generationMetadata, asyncJobId: undefined, asyncJobStatus: undefined } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "局部修改失败";
@@ -2385,7 +2418,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [attachAsyncGenerationJob, effectiveConfig, finishGenerationRequest, generationRequestId, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [attachAsyncGenerationJob, effectiveConfig, finishGenerationRequest, generationRequestId, isAiConfigReady, message, openConfigDialog, showGeneratedImagePreview, startGenerationRequest, syncAsyncGenerationJobStatus],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -2453,11 +2486,12 @@ function InfiniteCanvasPage() {
                     prompt,
                     [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }],
                     undefined,
-                    { signal: controller.signal, requestId: generationRequestId(childId, controller), onAsyncJobCreated: (jobId) => attachAsyncGenerationJob(childId, controller, jobId) },
+                    { signal: controller.signal, requestId: generationRequestId(childId, controller), onAsyncJobCreated: (jobId) => attachAsyncGenerationJob(childId, controller, jobId), onAsyncJobStatus: (job) => syncAsyncGenerationJobStatus(childId, job) },
                 ).then((items) => items[0]);
-                const uploaded = await uploadImage(image.dataUrl);
-                const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata, asyncJobId: undefined } } : item)));
+                showGeneratedImagePreview(childId, image.dataUrl);
+                const prepared = await prepareGeneratedImageNode(image.dataUrl);
+                const size = fitNodeSize(prepared.width, prepared.height, imageConfig.width, imageConfig.height);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...prepared.metadata, prompt, ...generationMetadata, asyncJobId: undefined, asyncJobStatus: undefined } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
@@ -2467,7 +2501,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [attachAsyncGenerationJob, effectiveConfig, finishGenerationRequest, generationRequestId, openConfigDialog, startGenerationRequest],
+        [attachAsyncGenerationJob, effectiveConfig, finishGenerationRequest, generationRequestId, openConfigDialog, showGeneratedImagePreview, startGenerationRequest, syncAsyncGenerationJobStatus],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2692,16 +2726,19 @@ function InfiniteCanvasPage() {
                               signal: controller.signal,
                               requestId: generationRequestId(nodeId, controller),
                               onAsyncJobCreated: (jobId) => attachAsyncGenerationJob(nodeId, controller, jobId),
+                              onAsyncJobStatus: (job) => syncAsyncGenerationJobStatus(nodeId, job),
                           }).then((items) => items[0])
                         : await requestGeneration({ ...generationConfig, count: "1" }, fullPrompt, {
                               signal: controller.signal,
                               requestId: generationRequestId(nodeId, controller),
                               onAsyncJobCreated: (jobId) => attachAsyncGenerationJob(nodeId, controller, jobId),
+                              onAsyncJobStatus: (job) => syncAsyncGenerationJobStatus(nodeId, job),
                           }).then((items) => items[0]);
-                    const uploaded = await uploadImage(image.dataUrl);
+                    showGeneratedImagePreview(nodeId, image.dataUrl);
+                    const prepared = await prepareGeneratedImageNode(image.dataUrl);
                     setNodes((prev) =>
                         prev.map((node) =>
-                            node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined, asyncJobId: undefined } } : node,
+                            node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...prepared.metadata, prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined, asyncJobId: undefined, asyncJobStatus: undefined } } : node,
                         ),
                     );
                     setDialogNodeId(null);
@@ -2885,6 +2922,7 @@ function InfiniteCanvasPage() {
                                     usedSafetyFallback = true;
                                     image = await requestImage(generatedPrompt, "safety");
                                 }
+                                showGeneratedImagePreview(targetId, image.dataUrl);
                                 const renderedImage = sourceNode?.metadata?.pantoneCard ? await addPantoneReferenceCard(image.dataUrl) : image.dataUrl;
                                 // Do not turn an already successful upstream job into a failed
                                 // canvas node when the browser cache is temporarily unavailable.
@@ -3139,7 +3177,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [attachAsyncGenerationJob, attachVideoGenerationTask, effectiveConfig, finishGenerationRequest, generationRequestId, isAiConfigReady, message, openConfigDialog, recoverStudioImageJob, startGenerationRequest],
+        [attachAsyncGenerationJob, attachVideoGenerationTask, effectiveConfig, finishGenerationRequest, generationRequestId, isAiConfigReady, message, openConfigDialog, recoverStudioImageJob, showGeneratedImagePreview, startGenerationRequest, syncAsyncGenerationJobStatus],
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
@@ -3653,6 +3691,7 @@ function InfiniteCanvasPage() {
                     usedSafetyFallback = true;
                     image = await requestImage(generatedPrompt, "safety");
                 }
+                showGeneratedImagePreview(node.id, image.dataUrl);
                 const renderedImage = savedImageMetadata?.pantoneCard || sourceNode.metadata?.pantoneCard ? await addPantoneReferenceCard(image.dataUrl) : image.dataUrl;
                 const uploadedImage = await uploadImage(renderedImage);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
@@ -3708,7 +3747,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [attachAsyncGenerationJob, attachVideoGenerationTask, effectiveConfig, finishGenerationRequest, generationRequestId, isAiConfigReady, message, openConfigDialog, startGenerationRequest, syncAsyncGenerationJobStatus],
+        [attachAsyncGenerationJob, attachVideoGenerationTask, effectiveConfig, finishGenerationRequest, generationRequestId, isAiConfigReady, message, openConfigDialog, showGeneratedImagePreview, startGenerationRequest, syncAsyncGenerationJobStatus],
     );
 
     const handleRegenerateNode = useCallback(

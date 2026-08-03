@@ -438,7 +438,7 @@ export const CanvasNode = React.memo(function CanvasNode({
 function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} />;
+    if (props.node.metadata?.status === "loading" && !(props.node.type === CanvasNodeType.Image && props.node.metadata.content)) return <LoadingContent node={props.node} theme={props.theme} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onRegenerate={props.onRegenerate} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
@@ -707,6 +707,12 @@ function ImageContent({
                     className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
                 />
             </div>
+            {node.metadata?.status === "loading" ? (
+                <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex items-center justify-center gap-2 rounded-xl bg-black/65 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-md">
+                    <span className="size-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" />
+                    <span>{node.metadata.asyncResultReady ? "图片已生成，正在加载" : "正在生成新图片"}</span>
+                </div>
+            ) : null}
             {isBatchRoot ? (
                 <button
                     type="button"
