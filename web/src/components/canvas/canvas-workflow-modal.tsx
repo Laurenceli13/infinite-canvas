@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Input, InputNumber, Modal, Segmented, Select, Switch, Tag } from "antd";
-import { Clapperboard, ImagePlus, PackageSearch, Shirt, Trash2, WandSparkles } from "lucide-react";
+import { Clapperboard, ImagePlus, PackageSearch, Shirt, WandSparkles } from "lucide-react";
 
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import {
@@ -14,6 +14,7 @@ import {
 import { fetchStudioWorkflows, type StudioWorkflow } from "@/services/studio-managed";
 import { modelOptionName, selectableModelsByCapability, type AiConfig } from "@/stores/use-config-store";
 import { CanvasVideoWorkflowForm } from "./canvas-video-workflow-form";
+import { WorkflowFilePreviewGrid } from "./workflow-file-preview-grid";
 
 type Props = {
     open: boolean;
@@ -75,7 +76,7 @@ export function CanvasWorkflowModal({ open, config, onClose, onRun }: Props) {
     const selectedOutputs: StudioWorkflowOutput[] = outputOptions.map((item) => ({ type: item.value, count: counts[item.value] || 0 })).filter((item) => item.count > 0);
     const totalImages = selectedOutputs.reduce((sum, item) => sum + item.count, 0);
     const estimatedCredits = model
-        ? requestCreditCost({ channelMode: config.channelMode, modelCosts: config.modelCosts, modelPricingRules: config.modelPricingRules, model, capability: "image", count: totalImages, quality: config.quality, size: config.size })
+        ? requestCreditCost({ channelMode: config.channelMode, modelCosts: config.modelCosts, modelPricingRules: config.modelPricingRules, model, capability: "image", count: totalImages, quality: config.quality, size: config.size, imageResolution: config.imageResolution })
         : 0;
     const modelOptions = selectableModelsByCapability(config, "image").map((value) => ({ value, label: modelOptionName(value) }));
 
@@ -111,6 +112,7 @@ export function CanvasWorkflowModal({ open, config, onClose, onRun }: Props) {
                 model,
                 quality: config.quality,
                 size: config.size,
+                imageResolution: config.imageResolution,
                 platform,
                 targetMarket,
                 language,
@@ -185,13 +187,7 @@ export function CanvasWorkflowModal({ open, config, onClose, onRun }: Props) {
                                     上传产品、款式、鞋底、商标或辅助参考图
                                 </button>
                                 {files.length ? (
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                        {files.map((file, index) => (
-                                            <Tag key={`${file.name}-${file.lastModified}-${index}`} closable={!running} onClose={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} closeIcon={<Trash2 className="size-3" />}>
-                                                {file.name}
-                                            </Tag>
-                                        ))}
-                                    </div>
+                                    <WorkflowFilePreviewGrid files={files} disabled={running} onRemove={(index) => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} />
                                 ) : null}
                             </section>
 

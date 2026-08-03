@@ -1,4 +1,4 @@
-import { Bot, Globe, Menu } from "lucide-react";
+﻿import { Bot, Globe, Menu } from "lucide-react";
 import { Button, Segmented, Tooltip } from "antd";
 import { Link, useLocation } from "react-router-dom";
 
@@ -40,8 +40,8 @@ export function AppTopNav() {
         <>
             {!hideHeader ? (
                 <header className="sticky top-0 z-20 h-14 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800">
-                    <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-5 px-6">
-                        <div className="flex min-w-0 items-center">
+                    <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-3 px-4 sm:px-6">
+                        <div className="flex min-w-0 flex-1 items-center">
                             <Link to="/" className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
                                 <span
                                     className="size-5 shrink-0 bg-current"
@@ -50,7 +50,7 @@ export function AppTopNav() {
                                         WebkitMask: "url(/logo.svg) center / contain no-repeat",
                                     }}
                                 />
-                                <span className="text-base font-medium">无限画布</span>
+                                <span className="hidden text-base font-medium sm:inline">无限画布</span>
                             </Link>
 
                             <button
@@ -63,14 +63,17 @@ export function AppTopNav() {
                                 <Menu className="size-5" />
                             </button>
 
-                            <nav className="hide-scrollbar ml-8 hidden h-14 min-w-0 items-center gap-7 overflow-x-auto md:flex">
+                            <nav className="hide-scrollbar ml-4 hidden h-14 min-w-0 flex-1 items-center gap-4 overflow-x-auto md:flex">
                                 {visibleTools.map((tool) => {
                                     const Icon = tool.icon;
+                                    const label = navigationToolLabel(tool.slug, locale);
                                     const active = tool.slug === activeToolSlug;
                                     return (
                                         <Link
                                             key={tool.slug}
                                             to={`/${tool.slug}`}
+                                            aria-label={label}
+                                            title={label}
                                             className={cn(
                                                 "relative flex h-14 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px",
                                                 active
@@ -79,14 +82,14 @@ export function AppTopNav() {
                                             )}
                                         >
                                             <Icon className="size-4" />
-                                            <span className="truncate">{navigationToolLabel(tool.slug, locale)}</span>
+                                            <span className="hidden truncate xl:inline">{label}</span>
                                         </Link>
                                     );
                                 })}
                             </nav>
                         </div>
 
-                        <div className="my-auto flex h-9 min-w-0 items-center justify-end gap-2 justify-self-end whitespace-nowrap">
+                        <div className="my-auto flex h-9 shrink-0 min-w-0 items-center justify-end gap-1 md:gap-2 whitespace-nowrap">
                             <div className="hidden items-center gap-2 xl:flex">
                                 <Globe className="size-4 text-stone-500" />
                                 <Segmented
@@ -107,7 +110,7 @@ export function AppTopNav() {
             ) : null}
 
             <MobileNavDrawer open={mobileNavOpen} activeToolSlug={activeToolSlug} onClose={() => setMobileNavOpen(false)} />
-            {!managed ? <AppConfigModal /> : null}
+            <AppConfigModal />
         </>
     );
 }

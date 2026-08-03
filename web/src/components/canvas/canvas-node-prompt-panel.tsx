@@ -3,6 +3,7 @@ import { ArrowUp, LoaderCircle, Square } from "lucide-react";
 import { Button } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
+import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { defaultConfig, modelMatchesCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -38,6 +39,19 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const hasImageContent = node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
     const isEditingExistingContent = hasTextContent || hasImageContent;
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : node.metadata?.prompt || "");
+    const credits = requestCreditCost({
+        channelMode: config.channelMode,
+        modelCosts: config.modelCosts,
+        modelPricingRules: config.modelPricingRules,
+        model: config.model,
+        capability: mode,
+        count: mode === "image" ? config.count : 1,
+        seconds: mode === "video" ? config.videoSeconds : 1,
+        quality: config.quality,
+        size: config.size,
+        imageResolution: config.imageResolution,
+        vquality: config.vquality,
+    });
 
     useEffect(() => {
         setPrompt(isEditingExistingContent ? "" : node.metadata?.prompt || "");
@@ -118,7 +132,13 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                                 <span className="text-xs font-medium">停止</span>
                             </>
                         ) : (
-                            <ArrowUp className="size-4" />
+                            <>
+                                <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                    <CreditSymbol />
+                                    {credits.toFixed(2)}
+                                </span>
+                                <ArrowUp className="size-4" />
+                            </>
                         )}
                     </span>
                 </Button>
@@ -145,6 +165,7 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         model,
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
         size: node.metadata?.size || globalConfig.size || defaultConfig.size,
+        imageResolution: node.metadata?.imageResolution || globalConfig.imageResolution || defaultConfig.imageResolution,
         background: node.metadata?.background ?? globalConfig.background ?? defaultConfig.background,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,

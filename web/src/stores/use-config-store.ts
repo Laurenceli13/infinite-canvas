@@ -25,6 +25,7 @@ export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ChannelModel = {
     name: string;
     capability: ModelCapability;
+    displayName?: string;
     script?: string;
 };
 
@@ -66,6 +67,7 @@ export type AiConfig = {
     audioModels: string[];
     quality: string;
     size: string;
+    imageResolution: string;
     background: string;
     count: string;
     canvasImageCount: string;
@@ -150,6 +152,7 @@ export const defaultConfig: AiConfig = {
     audioModels: ["default::gpt-4o-mini-tts"],
     quality: "auto",
     size: "1:1",
+    imageResolution: "2k",
     background: "",
     count: "1",
     canvasImageCount: "3",
@@ -351,7 +354,29 @@ export function modelOptionLabel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     if (!decoded) return value;
     const channel = config.channels.find((item) => item.id === decoded.channelId);
-    return channel ? `${decoded.model}（${channel.name}）` : decoded.model;
+    const displayName = channel?.models.find((item) => item.name === decoded.model)?.displayName?.trim() || decoded.model;
+    return channel ? `${displayName}（${modelProviderLabel(channel, decoded.model)}）` : displayName;
+}
+
+function modelProviderLabel(channel: ModelChannel, modelName: string) {
+    return inferProviderLabel(modelName, channel.apiFormat) || apiFormatLabel(channel.apiFormat);
+}
+
+function inferProviderLabel(modelName: string, apiFormat: ApiCallFormat) {
+    const value = `${modelName} ${apiFormat}`.toLowerCase();
+    if (value.includes("gpt") || value.includes("dall-e") || value.includes("dalle") || value.includes("openai")) return "OpenAI";
+    if (value.includes("gemini") || value.includes("imagen") || value.includes("veo")) return "Google";
+    if (value.includes("agnes")) return "Agnes";
+    if (value.includes("grok")) return "Grok";
+    if (value.includes("deepseek")) return "DeepSeek";
+    if (value.includes("seedance") || value.includes("seedream")) return "Seedance";
+    if (value.includes("mimo")) return "Mimo";
+    if (value.includes("minimax")) return "MiniMax";
+    if (value.includes("midjourney")) return "Midjourney";
+    if (value.includes("kling")) return "Kling";
+    if (value.includes("happyhors")) return "HappyHors";
+    if (value.includes("omni")) return "Omni";
+    return "";
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {

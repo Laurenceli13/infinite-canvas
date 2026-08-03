@@ -59,7 +59,7 @@ export function usePluginHost(params: PluginHostParams) {
             generateVideo: async (prompt, options) => {
                 const config = {
                     ...buildGenerationConfig(effectiveConfig, undefined, "video"),
-                    ...(options?.model ? { model: options.model } : {}),
+                    ...(options?.model ? { model: options.model, videoModel: options.model } : {}),
                     ...(options?.size ? { size: options.size } : {}),
                     ...(options?.seconds ? { videoSeconds: options.seconds } : {}),
                 };

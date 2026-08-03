@@ -1,7 +1,7 @@
-import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
+﻿import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, Moon, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video, WandSparkles } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -14,11 +14,13 @@ export function CanvasToolbar({
     canRedo,
     backgroundMode,
     showImageInfo,
+    boxSelectMode,
     onAddImage,
     onAddVideo,
     onAddAudio,
     onAddText,
     onAddConfig,
+    onOpenWorkflow,
     onAddGroup,
     onAddExtensionNode,
     onUndo,
@@ -27,6 +29,7 @@ export function CanvasToolbar({
     onDelete,
     onClear,
     onDeselect,
+    onBoxSelectModeChange,
     onBackgroundModeChange,
     onShowImageInfoChange,
 }: {
@@ -35,11 +38,13 @@ export function CanvasToolbar({
     canRedo: boolean;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    boxSelectMode: boolean;
     onAddImage: () => void;
     onAddVideo: () => void;
     onAddAudio: () => void;
     onAddText: () => void;
     onAddConfig: () => void;
+    onOpenWorkflow: () => void;
     onAddGroup: () => void;
     onAddExtensionNode: (type: string) => void;
     onUndo: () => void;
@@ -48,6 +53,7 @@ export function CanvasToolbar({
     onDelete: () => void;
     onClear: () => void;
     onDeselect: () => void;
+    onBoxSelectModeChange: (active: boolean) => void;
     onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
     onShowImageInfoChange: (show: boolean) => void;
 }) {
@@ -62,7 +68,7 @@ export function CanvasToolbar({
     const [panelX, setPanelX] = useState(0);
     const [extensionsOpen, setExtensionsOpen] = useState(false);
     const [extPanelX, setExtPanelX] = useState(0);
-    // 扩展(插件)节点,随注册表变化实时更新
+    // 鎵╁睍(鎻掍欢)鑺傜偣,闅忔敞鍐岃〃鍙樺寲瀹炴椂鏇存柊
     useNodeRegistryVersion();
     const extensionDefs = listNodeDefinitions().filter((def) => def.showInCreateMenu !== false && getNodePluginId(def.type) !== "builtin");
     const dockStyle = { background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item, boxShadow: colorTheme === "dark" ? "0 18px 45px rgba(0,0,0,.32)" : "0 16px 40px rgba(28,25,23,.12)" };
@@ -70,7 +76,7 @@ export function CanvasToolbar({
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
     const tip = hovered ? toolLabel(hovered) : "";
 
-    // 点击工具栏(含弹出面板)以外的地方,关闭弹出的扩展节点/画布外观面板
+    // 鐐瑰嚮宸ュ叿鏍?鍚脊鍑洪潰鏉?浠ュ鐨勫湴鏂?鍏抽棴寮瑰嚭鐨勬墿灞曡妭鐐?鐢诲竷澶栬闈㈡澘
     useEffect(() => {
         if (!extensionsOpen && !appearanceOpen) return;
         const handlePointerDown = (event: PointerEvent) => {
@@ -87,8 +93,36 @@ export function CanvasToolbar({
         <div ref={rootRef} className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
             {tip ? <DockTip label={tip} x={tipX} theme={theme} /> : null}
             <div ref={wrapRef} className="thin-scrollbar pointer-events-auto flex h-14 max-w-full items-center gap-1 overflow-x-auto rounded-xl border px-2 shadow-lg backdrop-blur [&>*]:shrink-0" style={dockStyle}>
-                <ToolbarButton id="tool-hand" label="移动/选择" active={!selectedCount} hovered={hovered} activeStyle={activeStyle} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onDeselect}>
+                <ToolbarButton
+                    id="tool-hand"
+                    label="移动/选择"
+                    active={!boxSelectMode}
+                    hovered={hovered}
+                    activeStyle={activeStyle}
+                    hoverStyle={hoverStyle}
+                    wrapRef={wrapRef}
+                    onTipX={setTipX}
+                    onHover={setHovered}
+                    onClick={() => {
+                        onBoxSelectModeChange(false);
+                        onDeselect();
+                    }}
+                >
                     <Hand className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton
+                    id="tool-box-select"
+                    label="框选节点"
+                    active={boxSelectMode}
+                    hovered={hovered}
+                    activeStyle={activeStyle}
+                    hoverStyle={hoverStyle}
+                    wrapRef={wrapRef}
+                    onTipX={setTipX}
+                    onHover={setHovered}
+                    onClick={() => onBoxSelectModeChange(!boxSelectMode)}
+                >
+                    <MousePointer2 className="size-4.5" />
                 </ToolbarButton>
                 <ToolbarButton id="tool-undo" label="撤销" disabled={!canUndo} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUndo}>
                     <Undo2 className="size-4.5" />
@@ -111,6 +145,9 @@ export function CanvasToolbar({
                 </ToolbarButton>
                 <ToolbarButton id="tool-config" label="生成配置" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
                     <Settings2 className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-workflow" label="行业生成工作流" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenWorkflow}>
+                    <WandSparkles className="size-4.5" />
                 </ToolbarButton>
                 <ToolbarButton id="tool-group" label="组" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
                     <Group className="size-4.5" />
@@ -263,7 +300,6 @@ export function CanvasToolbar({
         </div>
     );
 }
-
 function ToolbarButton({
     id,
     label,
@@ -347,6 +383,7 @@ function DockTip({ label, x, theme }: { label: string; x: number; theme: CanvasT
 
 function toolLabel(id: string) {
     if (id === "tool-hand") return "移动/选择";
+    if (id === "tool-box-select") return "框选节点";
     if (id === "tool-undo") return "撤销";
     if (id === "tool-redo") return "重做";
     if (id === "tool-text") return "文本";
@@ -354,6 +391,7 @@ function toolLabel(id: string) {
     if (id === "tool-video") return "视频";
     if (id === "tool-audio") return "音频";
     if (id === "tool-config") return "生成配置";
+    if (id === "tool-workflow") return "行业生成工作流";
     if (id === "tool-group") return "组";
     if (id === "tool-extensions") return "扩展节点";
     if (id === "tool-upload") return "上传资产";

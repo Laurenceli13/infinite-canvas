@@ -36,6 +36,7 @@ export type CanvasNodeMetadata = {
     generationType?: CanvasImageGenerationType;
     model?: string;
     size?: string;
+    imageResolution?: string;
     quality?: string;
     background?: string;
     count?: number;
@@ -68,6 +69,11 @@ export type CanvasNodeMetadata = {
     pantoneCard?: boolean;
     safetyFallback?: boolean;
     asyncJobId?: string;
+    asyncJobStatus?: "queued" | "running" | "succeeded" | "failed" | "refund_failed" | "cancelled";
+    asyncJobQueuePosition?: number;
+    videoTaskId?: string;
+    videoTaskProvider?: "openai" | "seedance" | "agnes";
+    videoTaskStatus?: "pending" | "failed";
 };
 
 export type CanvasNodeData = {

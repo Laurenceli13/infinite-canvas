@@ -99,11 +99,18 @@ export function CanvasNodeUpscaleDialog({ dataUrl, open, onClose, onConfirm }: {
                                 <span className="font-semibold">{outputSize ? `${outputSize.width} x ${outputSize.height} px` : "未知"}</span>
                             </div>
                         </div>
+                        <div className="rounded-xl border border-dashed px-4 py-3 text-sm">
+                            <div className="flex items-center justify-between gap-4">
+                                <span className="opacity-60">积分消耗</span>
+                                <span className="font-semibold">0.00 积分</span>
+                            </div>
+                            <p className="mt-1 text-xs opacity-55">本地插值处理，不调用模型，不扣除积分。</p>
+                        </div>
                     </div>
                 </div>
                 <div className="flex justify-end">
                     <Button type="primary" size="large" icon={<ImagePlus className="size-4" />} disabled={!canUpscale} onClick={() => onConfirm(params)}>
-                        生成放大图
+                        生成放大图（0.00 积分）
                     </Button>
                 </div>
             </div>

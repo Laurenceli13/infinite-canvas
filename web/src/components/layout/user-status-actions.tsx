@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { BookOpen, History, Keyboard, LogOut, Puzzle, Settings2, Shield } from "lucide-react";
-import { App, Button, Tag } from "antd";
-import { Link, useNavigate } from "react-router-dom";
+import { BookOpen, BrainCircuit, Cpu, Headphones, History, Keyboard, LogOut, Puzzle, QrCode, Settings2, Shield } from "lucide-react";
+import { App, Button, Modal, Tag } from "antd";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { GitHubLink } from "@/components/layout/github-link";
@@ -24,6 +24,7 @@ type UserStatusActionsProps = {
 
 export function UserStatusActions({ showConfig = true, variant = "default", onOpenShortcuts, onOpenPlugins }: UserStatusActionsProps) {
     const { message } = App.useApp();
+    const location = useLocation();
     const navigate = useNavigate();
     const theme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
@@ -35,6 +36,8 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const setStudioUser = useStudioSessionStore((state) => state.setUser);
     const [displayPoints, setDisplayPoints] = useState(() => Number(studioUser?.points || 0));
     const [visibleDeltaId, setVisibleDeltaId] = useState<number | null>(null);
+    const [contactOpen, setContactOpen] = useState(false);
+    const [previewQr, setPreviewQr] = useState<{ label: string; image: string } | null>(null);
     const animationFrameRef = useRef<number | null>(null);
     const displayPointsRef = useRef(Number(studioUser?.points || 0));
     const canvasTheme = canvasThemes[theme];
@@ -53,6 +56,14 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
             docs: "文档",
             settings: "配置",
             shortcuts: "快捷键",
+            contact: "联系客服",
+            contactTitle: "联系客服",
+            contactHint: "微信或 QQ 扫码联系客服；点击二维码可放大。",
+            clickToZoom: "点击放大扫码",
+            massmorePortal: "进入 MassMore 中转站",
+            massmorePortalTip: "多号池分发，主要Claude/OpenAI/Grok等主流模型",
+            mtlinePortal: "进入 Mtline 中转站",
+            mtlinePortalTip: "几十种模型聚合平台，一个平台注册，多种模型随意切换",
             signOut: "退出登录",
             signedOut: "已退出登录",
             toLight: "切换到浅色主题",
@@ -66,6 +77,14 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
             docs: "Docs",
             settings: "Settings",
             shortcuts: "Shortcuts",
+            contact: "Contact support",
+            contactTitle: "Contact support",
+            contactHint: "Scan with WeChat or QQ. Click a QR code to enlarge it.",
+            clickToZoom: "Click to enlarge",
+            massmorePortal: "Open MassMore relay",
+            massmorePortalTip: "Multi-account pool dispatch for Claude, OpenAI, Grok, and other mainstream models",
+            mtlinePortal: "Open Mtline relay",
+            mtlinePortalTip: "Aggregated platform with dozens of models. Register once and switch freely",
             signOut: "Sign out",
             signedOut: "Signed out",
             toLight: "Switch to light theme",
@@ -74,6 +93,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     }[locale];
 
     const localeCode = locale === "zh" ? "zh-CN" : "en-US";
+    const usageReturnTo = `${location.pathname}${location.search}${location.hash}`;
     const formattedPoints = useMemo(
         () =>
             displayPoints.toLocaleString(localeCode, {
@@ -87,6 +107,13 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
         const sign = pointsDelta.amount > 0 ? "+" : "";
         return `${sign}${pointsDelta.amount.toLocaleString(localeCode, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }, [localeCode, pointsDelta]);
+    const supportContacts = useMemo(
+        () => [
+            { label: locale === "zh" ? "微信客服" : "WeChat", image: "/contact/wechat-support.png" },
+            { label: locale === "zh" ? "QQ 客服" : "QQ", image: "/contact/qq-support.webp" },
+        ],
+        [locale],
+    );
     const pointsDeltaActive = Boolean(pointsDelta && visibleDeltaId === pointsDelta.id);
     const pointsDeltaTone = pointsDelta?.amount && pointsDelta.amount > 0 ? "gain" : "loss";
 
@@ -134,6 +161,15 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
         return () => window.clearTimeout(timer);
     }, [clearPointsDelta, pointsDelta]);
 
+    useEffect(() => {
+        if (!contactOpen && !studioUser) return;
+        supportContacts.forEach((contact) => {
+            const image = new Image();
+            image.decoding = "async";
+            image.src = contact.image;
+        });
+    }, [contactOpen, studioUser, supportContacts]);
+
     const logout = async () => {
         try {
             await studioLogout();
@@ -146,6 +182,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     };
 
     return (
+        <>
         <div className="inline-flex shrink-0 items-center gap-1">
             {onOpenPlugins && !isStudioManagedHost() ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenPlugins} aria-label="节点插件" title="节点插件">
@@ -225,15 +262,32 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 </Link>
             ) : null}
             {isStudioManagedHost() && studioUser ? (
-                <Link to="/usage" className={naturalIconClass} style={iconStyle} aria-label={text.usage} title={text.usage}>
+                <Link to="/usage" state={{ from: usageReturnTo }} className={naturalIconClass} style={iconStyle} aria-label={text.usage} title={text.usage}>
                     <History className="size-4" />
                 </Link>
             ) : null}
-            <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={text.docs} title={text.docs}>
-                <BookOpen className="size-4" />
-            </a>
-            {showConfig && !isStudioManagedHost() ? (
-                <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => openConfigDialog(false)} aria-label={text.settings} title={text.settings}>
+            {isStudioManagedHost() && studioUser ? (
+                <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => setContactOpen(true)} aria-label={text.contact} title={text.contact}>
+                    <Headphones className="size-4" />
+                </button>
+            ) : null}
+            {isStudioManagedHost() && studioUser ? (
+                <a href="https://massmore.org" target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={text.massmorePortal} title={text.massmorePortalTip}>
+                    <BrainCircuit className="size-4" />
+                </a>
+            ) : null}
+            {isStudioManagedHost() && studioUser ? (
+                <a href="https://mtline.cc" target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={text.mtlinePortal} title={text.mtlinePortalTip}>
+                    <Cpu className="size-4" />
+                </a>
+            ) : null}
+            {!isStudioManagedHost() ? (
+                <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={text.docs} title={text.docs}>
+                    <BookOpen className="size-4" />
+                </a>
+            ) : null}
+            {showConfig && (!isStudioManagedHost() || studioUser) ? (
+                <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => openConfigDialog(false, isStudioManagedHost() ? "preferences" : "channels")} aria-label={text.settings} title={text.settings}>
                     <Settings2 className="size-4" />
                 </button>
             ) : null}
@@ -256,5 +310,49 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 <Button type="text" size="small" className="!h-7 !w-7 !min-w-7" icon={<LogOut className="size-4" />} onClick={() => void logout()} title={text.signOut} />
             ) : null}
         </div>
+        <Modal title={text.contactTitle} open={contactOpen} onCancel={() => setContactOpen(false)} footer={null} centered width={560}>
+            <p className="mb-4 text-sm text-stone-500 dark:text-stone-400">{text.contactHint}</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+                {supportContacts.map((contact) => (
+                    <button
+                        key={contact.label}
+                        type="button"
+                        className="group rounded-lg border border-stone-200 bg-white p-4 text-left transition hover:border-stone-400 hover:shadow-sm dark:border-stone-800 dark:bg-stone-950 dark:hover:border-stone-600"
+                        onClick={() => setPreviewQr(contact)}
+                    >
+                        <div className="mb-3 flex items-center justify-between gap-3 text-sm font-medium text-stone-900 dark:text-stone-100">
+                            <span className="inline-flex items-center gap-2">
+                                <QrCode className="size-4" />
+                                {contact.label}
+                            </span>
+                            <span className="text-xs font-normal text-stone-400 group-hover:text-stone-600 dark:group-hover:text-stone-300">{text.clickToZoom}</span>
+                        </div>
+                        <img
+                            className="mx-auto aspect-square w-full max-w-56 rounded-md object-contain"
+                            src={contact.image}
+                            alt={contact.label}
+                            width={224}
+                            height={224}
+                            loading="eager"
+                            decoding="async"
+                        />
+                    </button>
+                ))}
+            </div>
+        </Modal>
+        <Modal title={previewQr?.label} open={Boolean(previewQr)} onCancel={() => setPreviewQr(null)} footer={null} centered width={460}>
+            {previewQr ? (
+                <img
+                    className="mx-auto aspect-square w-full max-w-[360px] rounded-lg object-contain"
+                    src={previewQr.image}
+                    alt={previewQr.label}
+                    width={360}
+                    height={360}
+                    loading="eager"
+                    decoding="async"
+                />
+            ) : null}
+        </Modal>
+        </>
     );
 }

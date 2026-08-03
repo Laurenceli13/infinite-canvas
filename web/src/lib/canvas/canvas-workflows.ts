@@ -20,6 +20,7 @@ export type ImageStudioWorkflowRunPayload = {
     model: string;
     quality: string;
     size: string;
+    imageResolution: string;
     platform: string;
     targetMarket: string;
     language: string;
@@ -42,6 +43,7 @@ export type VideoStudioWorkflowRunPayload = {
     syncGenerateVideo: boolean;
     imageQuality: string;
     imageSize: string;
+    imageResolution: string;
     videoSeconds: string;
     videoResolution: string;
     videoSize: string;

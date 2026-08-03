@@ -16,6 +16,7 @@ export type RawPrompt = {
 };
 
 type RunOptions = { signal?: AbortSignal };
+type RuntimePolicyOptions = RunOptions & { allowInStudio?: boolean };
 
 async function fetchText(url: string) {
     const response = await fetch(url, { cache: "no-store" });
@@ -92,8 +93,8 @@ function makePrompt(input: { id: string; title: string; prompt: string; coverUrl
 }
 
 /** Run a prompt-source script and normalize its result into a deduped RawPrompt[]. */
-export async function runPromptSource(script: string, options?: RunOptions): Promise<RawPrompt[]> {
-    if (typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org") {
+export async function runPromptSource(script: string, options?: RuntimePolicyOptions): Promise<RawPrompt[]> {
+    if (typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org" && !options?.allowInStudio) {
         throw new Error("Studio 工作台不允许执行用户自定义提示词来源脚本");
     }
     const body = script.trim();

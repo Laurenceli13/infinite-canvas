@@ -2,15 +2,9 @@ import { type ReactNode, useState } from "react";
 import { ConfigProvider, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { modelPricingRules, enabledImageQualities, enabledImageSizeTiers, imageSizeTier } from "@/lib/studio-pricing";
+import { modelPricingRules, enabledImageSizeTiers, imageResolutionItems } from "@/lib/studio-pricing";
 import type { AiConfig } from "@/stores/use-config-store";
 
-const qualityOptions = [
-    { value: "auto", label: "自动" },
-    { value: "high", label: "高" },
-    { value: "medium", label: "中" },
-    { value: "low", label: "低" },
-];
 const DIMENSION_STEP = 16;
 
 const aspectOptions = [
@@ -21,20 +15,21 @@ const aspectOptions = [
     { value: "3:4", label: "3:4", width: 1024, height: 1360, icon: "portrait" },
     { value: "16:9", label: "16:9", width: 1824, height: 1024, icon: "landscape" },
     { value: "9:16", label: "9:16", width: 1024, height: 1824, icon: "portrait" },
-    { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
-    { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
-    { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
-    { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
-    { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 
-export const imageQualityOptions = qualityOptions.map((item) => ({ value: item.value, label: item.label }));
-export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.size || item.value, label: item.label }));
+const qualityOptions = [
+    { value: "auto", label: "自动" },
+    { value: "high", label: "高" },
+    { value: "medium", label: "中" },
+    { value: "low", label: "低" },
+] as const;
+
+export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.value, label: item.label }));
 
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "quality" | "size" | "count" | "background", value: string) => void;
+    onConfigChange: (key: "quality" | "size" | "imageResolution" | "count" | "background", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
@@ -44,18 +39,27 @@ type ImageSettingsPanelProps = {
 
 export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
-    const quality = config.quality || "auto";
     const rules = modelPricingRules(config.modelPricingRules, config.model);
-    const enabledQualities = enabledImageQualities(rules);
     const enabledSizeTiers = enabledImageSizeTiers(rules);
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
+    const imageResolution = config.imageResolution || inferLegacyImageResolution(activeSize);
+    const imageQuality = qualityOptions.some((item) => item.value === config.quality) ? config.quality : "auto";
     const transparentBackground = config.background === "transparent";
-    const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
-    const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
+    const fallbackAspect = aspectOptions.find((item) => item.value !== "auto") || aspectOptions[0];
+    const dimensions = readSizeDimensions(activeSize, fallbackAspect);
+    const selectedAspect = findAspectOption(activeSize, dimensions);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.size || option?.value || "auto");
+        if (!option || option.value === "auto") {
+            onConfigChange("size", "auto");
+            return;
+        }
+        onConfigChange("size", sizeForResolution(option, imageResolution, snapDimensionToStep));
+    };
+    const selectResolution = (value: string) => {
+        onConfigChange("imageResolution", value);
+        if (activeSize !== "auto") onConfigChange("size", sizeForResolution(dimensions, value, snapDimensionToStep));
     };
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
@@ -77,14 +81,17 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
             >
                 {showTitle ? <div className="text-lg font-semibold">图像设置</div> : null}
                 <div className="space-y-2.5">
-                    <SettingTitle color={theme.node.muted}>质量</SettingTitle>
+                    <SettingTitle color={theme.node.muted}>图像质量</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {qualityOptions.filter((item) => enabledQualities.includes(item.value)).map((item) => (
-                            <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
+                        {qualityOptions.map((item) => (
+                            <OptionPill key={item.value} selected={imageQuality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {item.label}
                             </OptionPill>
                         ))}
                     </div>
+                    <p className="text-xs" style={{ color: theme.node.muted, opacity: 0.75 }}>
+                        自动由模型决定；高、中、低会随请求一并发送给支持该参数的模型。
+                    </p>
                 </div>
                 <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-3">
@@ -107,7 +114,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>宽高比</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {aspectOptions.filter((item) => item.value === "auto" || enabledSizeTiers.includes(imageSizeTier(item.size || item.value))).map((item) => (
+                        {aspectOptions.map((item) => (
                             <button
                                 key={item.value}
                                 type="button"
@@ -120,6 +127,19 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 <span>{item.label}</span>
                             </button>
                         ))}
+                    </div>
+                </div>
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>输出分辨率</SettingTitle>
+                    <div className="grid grid-cols-3 gap-2.5">
+                        {imageResolutionItems.map((item) => {
+                            const disabled = !enabledSizeTiers.includes(item.value);
+                            return (
+                                <OptionPill key={item.value} selected={imageResolution === item.value} disabled={disabled} theme={theme} onClick={() => selectResolution(item.value)}>
+                                    {item.label}
+                                </OptionPill>
+                            );
+                        })}
                     </div>
                 </div>
                 <div className="flex items-center justify-between gap-3">
@@ -162,19 +182,21 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
     );
 }
 
-export function imageQualityLabel(value: string) {
-    return ({ auto: "自动", high: "高", medium: "中", low: "低" } as Record<string, string>)[value] || value;
-}
-
 export function imageSizeLabel(size: string) {
-    return aspectOptions.find((item) => (item.size || item.value) === size || item.value === size)?.label || size;
+    return aspectOptions.find((item) => item.value === size)?.label || size;
 }
 
-function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
+export function imageResolutionLabel(value: string) {
+    return imageResolutionItems.find((item) => item.value === value)?.label || value.toUpperCase();
+}
+
+function OptionPill({ selected, disabled = false, theme, onClick, children }: { selected: boolean; disabled?: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
     return (
         <button
             type="button"
-            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80"
+            disabled={disabled}
+            aria-disabled={disabled}
+            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
             style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={onClick}
@@ -256,6 +278,36 @@ function readSizeDimensions(size: string, fallback: { width: number; height: num
         width: match ? Number(match[1]) : fallback.width,
         height: match ? Number(match[2]) : fallback.height,
     };
+}
+
+function findAspectOption(size: string, dimensions: { width: number; height: number }) {
+    if (size === "auto") return aspectOptions.find((item) => item.value === "auto");
+    const ratio = dimensions.width / Math.max(1, dimensions.height);
+    return aspectOptions.find((item) => item.value !== "auto" && Math.abs(item.width / item.height - ratio) < 0.01);
+}
+
+function sizeForResolution(dimensions: { width: number; height: number }, resolution: string, alignToStep: boolean) {
+    const longSide = resolutionLongSide(resolution);
+    const currentLongSide = Math.max(dimensions.width, dimensions.height, 1);
+    const scale = longSide / currentLongSide;
+    const width = alignDimension(Math.max(1, Math.round(dimensions.width * scale)), alignToStep);
+    const height = alignDimension(Math.max(1, Math.round(dimensions.height * scale)), alignToStep);
+    return `${width}x${height}`;
+}
+
+function resolutionLongSide(resolution: string) {
+    if (resolution === "4k") return 3840;
+    if (resolution === "2k") return 2048;
+    return 1024;
+}
+
+function inferLegacyImageResolution(size: string) {
+    const match = size.match(/^(\d+)x(\d+)$/);
+    if (!match) return "2k";
+    const longSide = Math.max(Number(match[1]), Number(match[2]));
+    if (longSide > 3072) return "4k";
+    if (longSide > 1280) return "2k";
+    return "1k";
 }
 
 function alignDimension(value: number, enabled: boolean) {

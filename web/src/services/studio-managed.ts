@@ -28,6 +28,13 @@ export type StudioModel = {
     enabled: boolean;
     rowId?: number;
     providerId?: number;
+    failoverEnabled?: boolean;
+    failoverRouteModelIds?: number[];
+};
+
+export type StudioDiscoveredModel = {
+    id: string;
+    displayName: string;
 };
 
 export type StudioProvider = {
@@ -56,6 +63,13 @@ export type StudioProvider = {
     updated_at: number;
 };
 
+export type StudioConnectionTestResult = {
+    ok: boolean;
+    statusCode?: number | null;
+    message: string;
+    modelFound?: boolean | null;
+};
+
 export type StudioUsage = {
     id: number;
     external_key: string;
@@ -64,6 +78,8 @@ export type StudioUsage = {
     username?: string;
     email?: string;
     model: string;
+    provider_id?: number;
+    provider_name?: string;
     capability: string;
     credits: number;
     balance_delta: number;
@@ -116,12 +132,12 @@ export type StudioConcurrencyUser = {
 
 export type StudioConcurrencyConfig = {
     globalLimit: number;
-    globalMaxLimit: number;
+    globalMaxLimit: number | null;
     runningTotal: number;
     queuedTotal: number;
     defaultLimit: number;
     fallbackLimit: number;
-    maxLimit: number;
+    maxLimit: number | null;
     users: StudioConcurrencyUser[];
 };
 
@@ -252,6 +268,16 @@ export async function deleteStudioProvider(id: number) {
     return response.data;
 }
 
+export async function testStudioProvider(id: number) {
+    const response = await axios.post<ApiEnvelope<{ result: StudioConnectionTestResult }>>(studioApi(`/admin/providers/${id}/test`));
+    return response.data.result;
+}
+
+export async function discoverStudioProviderModels(id: number) {
+    const response = await axios.post<ApiEnvelope<{ models: StudioDiscoveredModel[] }>>(studioApi(`/admin/providers/${id}/models`));
+    return response.data.models || [];
+}
+
 export async function fetchStudioAdminModels() {
     const response = await axios.get<ApiEnvelope<{ models: StudioModel[] }>>(studioApi("/admin/models"));
     return response.data.models || [];
@@ -272,12 +298,26 @@ export async function deleteStudioModel(id: number) {
     return response.data;
 }
 
+export async function testStudioModel(id: number) {
+    const response = await axios.post<ApiEnvelope<{ result: StudioConnectionTestResult }>>(studioApi(`/admin/models/${id}/test`));
+    return response.data.result;
+}
+
+export async function updateStudioModelFailover(id: number, enabled: boolean, routeModelIds: number[]) {
+    const response = await axios.patch<ApiEnvelope<{ modelId: number; enabled: boolean; routeModelIds: number[] }>>(studioApi(`/admin/models/${id}/failover`), {
+        enabled,
+        routeModelIds,
+    });
+    return response.data;
+}
+
 export type StudioUsageFilters = {
     from?: number;
     to?: number;
     source?: string;
     user?: string;
     model?: string;
+    provider?: string;
     capability?: string;
     status?: string;
     limit?: number;
@@ -318,7 +358,7 @@ export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): 
         baseUrl: "https://studio.massmore.org",
         apiKey: "studio-managed",
         apiFormat: items[0]?.apiFormat || "openai",
-        models: Array.from(new Map(items.map((item) => [item.model, { name: item.model, capability: item.capability }])).values()),
+        models: Array.from(new Map(items.map((item) => [item.model, { name: item.model, displayName: item.displayName, capability: item.capability }])).values()),
     }));
     const all = uniqueOptions(models.map((model) => encodeChannelModel(channelIdForProvider(channels, model.provider), model.model)).filter(Boolean));
     const byCapability = (capability: ModelCapability) => uniqueOptions(models.filter((model) => model.capability === capability && model.enabled).map((model) => encodeChannelModel(channelIdForProvider(channels, model.provider), model.model)));

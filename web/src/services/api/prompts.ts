@@ -2,7 +2,7 @@ import localforage from "localforage";
 
 import { runPromptSource, type RawPrompt } from "./prompt-source-runtime";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
-import type { PromptSource } from "./prompt-source-presets";
+import { DEFAULT_PROMPT_SOURCES, type PromptSource } from "./prompt-source-presets";
 
 export type Prompt = RawPrompt & {
     category: string;
@@ -24,6 +24,7 @@ const promptCacheStore = localforage.createInstance({ name: "infinite-canvas", s
 type SourceCache = { items: Prompt[]; fetchedAt: number; signature: string };
 
 const loadingSources = new Map<string, Promise<Prompt[]>>();
+const officialPromptSourceIds = new Set(DEFAULT_PROMPT_SOURCES.map((source) => source.id));
 
 function enabledSources() {
     return usePromptSourceStore.getState().sources.filter((source) => source.enabled);
@@ -48,7 +49,7 @@ function withSourceMeta(source: PromptSource, items: RawPrompt[]): Prompt[] {
 }
 
 async function runSource(source: PromptSource): Promise<Prompt[]> {
-    const items = await runPromptSource(source.script);
+    const items = await runPromptSource(source.script, { allowInStudio: officialPromptSourceIds.has(source.id) });
     const prompts = withSourceMeta(source, items);
     await promptCacheStore.setItem<SourceCache>(cacheKey(source.id), { items: prompts, fetchedAt: Date.now(), signature: sourceSignature(source) });
     return prompts;

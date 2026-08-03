@@ -50,6 +50,7 @@ type CanvasNodeProps = {
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (node: CanvasNodeData) => void;
     onRetry?: (node: CanvasNodeData) => void;
+    onRegenerate?: (node: CanvasNodeData) => void;
     onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
@@ -71,6 +72,7 @@ type NodeContentRendererProps = {
     onStopEditing: () => void;
     mentionReferences: CanvasResourceReference[];
     onRetry?: (node: CanvasNodeData) => void;
+    onRegenerate?: (node: CanvasNodeData) => void;
     onGenerateImage?: (node: CanvasNodeData) => void;
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
@@ -111,6 +113,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     onToggleBatch,
     onSetBatchPrimary,
     onRetry,
+    onRegenerate,
     onGenerateImage,
     onViewImage,
     onContextMenu,
@@ -405,7 +408,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                         mentionReferences={mentionReferences}
                         onContentChange={onContentChange}
                         onStopEditing={() => setIsEditingContent(false)}
-                        onRetry={onRetry}
+                onRetry={onRetry}
+                onRegenerate={onRegenerate}
                         onGenerateImage={onGenerateImage}
                         onToggleBatch={() => onToggleBatch?.(data.id)}
                         onSetBatchPrimary={() => onSetBatchPrimary?.(data)}
@@ -434,8 +438,8 @@ export const CanvasNode = React.memo(function CanvasNode({
 function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
-    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} />;
+    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onRegenerate={props.onRegenerate} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
     if (Renderer) return <Renderer {...props} />;
@@ -475,32 +479,55 @@ function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererP
     );
 }
 
-function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
+function LoadingContent({ node, theme }: Pick<NodeContentRendererProps, "node" | "theme">) {
+    const queuePosition = node.metadata?.asyncJobStatus === "queued" ? node.metadata?.asyncJobQueuePosition : undefined;
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
             <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-            <span className="text-[10px] tracking-[0.2em]">生成中</span>
+            <span className="text-[10px] tracking-[0.2em]">{node.metadata?.asyncJobStatus === "queued" ? "排队中" : "生成中"}</span>
+            {queuePosition && queuePosition > 1 ? <span className="text-[10px]" style={{ color: theme.node.muted }}>前方 {queuePosition - 1} 个任务</span> : null}
         </div>
     );
 }
 
-function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
+function ErrorContent({ node, theme, onRetry, onRegenerate }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry" | "onRegenerate">) {
+    const hasSubmittedAsyncJob = Boolean(node.metadata?.asyncJobId || node.metadata?.videoTaskId);
+    const asyncJobTerminal = ["failed", "refund_failed", "cancelled"].includes(node.metadata?.asyncJobStatus || "") || node.metadata?.videoTaskStatus === "failed";
     return (
         <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
             <div className="text-xs leading-5 text-red-300">{node.metadata?.errorDetails || "生成失败"}</div>
-            <button
-                type="button"
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
-                style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
-                onClick={(event) => {
-                    event.stopPropagation();
-                    onRetry?.(node);
-                }}
-                onMouseDown={(event) => event.stopPropagation()}
-            >
-                <RefreshCw className="size-3.5" />
-                重试
-            </button>
+            <div className="flex flex-wrap justify-center gap-2">
+                {!hasSubmittedAsyncJob || !asyncJobTerminal ? (
+                    <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
+                        style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onRetry?.(node);
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <RefreshCw className="size-3.5" />
+                        {hasSubmittedAsyncJob ? "恢复任务" : "重试"}
+                    </button>
+                ) : null}
+                {hasSubmittedAsyncJob ? (
+                    <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
+                        style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onRegenerate?.(node);
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <RefreshCw className="size-3.5" />
+                        重新生成
+                    </button>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -571,9 +598,9 @@ function ImageNodeContent(props: NodeContentRendererProps) {
     if (!props.node.metadata?.content && props.isBatchRoot) {
         const content =
             props.node.metadata?.status === "loading" ? (
-                <LoadingContent theme={props.theme} />
+                <LoadingContent node={props.node} theme={props.theme} />
             ) : props.node.metadata?.status === "error" ? (
-                <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />
+                <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onRegenerate={props.onRegenerate} />
             ) : (
                 <EmptyImageContent {...props} isBatchRoot={false} />
             );

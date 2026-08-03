@@ -1,6 +1,6 @@
 import { App, Button, Form, Input, Modal, Progress, Select, Tabs } from "antd";
 import { Cloud, Pencil, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ModelPicker } from "@/components/model-picker";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
@@ -8,6 +8,7 @@ import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
@@ -49,7 +50,7 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
     );
 }
 
-export function AppConfigPanel({ showDoneButton = false, initialTab = "channels" }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
+export function AppConfigPanel({ showDoneButton = false, initialTab = "channels", managedMode = false }: { showDoneButton?: boolean; initialTab?: ConfigTabKey; managedMode?: boolean }) {
     const { message } = App.useApp();
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
     const [editingChannelId, setEditingChannelId] = useState("");
@@ -66,7 +67,10 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
     const webdavReady = Boolean(webdav.url.trim());
     const editingChannel = config.channels.find((channel) => channel.id === editingChannelId) || null;
-    useEffect(() => setActiveTab(initialTab), [initialTab]);
+    const availableTabs = useMemo<ConfigTabKey[]>(() => (managedMode ? ["preferences", "prompt-sources", "webdav"] : ["channels", "preferences", "prompt-sources", "webdav"]), [managedMode]);
+    useEffect(() => {
+        setActiveTab(availableTabs.includes(initialTab) ? initialTab : availableTabs[0]);
+    }, [availableTabs, initialTab]);
 
     const saveConfig = (nextConfig: AiConfig) => {
         (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => updateConfig(key, nextConfig[key]));
@@ -290,7 +294,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                             </Form>
                         ),
                     },
-                ]}
+                ].filter((item) => availableTabs.includes(item.key as ConfigTabKey))}
             />
             {showDoneButton ? (
                 <div className="mt-4 flex justify-end">
@@ -308,6 +312,7 @@ export function AppConfigModal() {
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
     const configTab = useConfigStore((state) => state.configTab);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
+    const managedMode = isStudioManagedHost();
     return (
         <Modal
             title={
@@ -323,7 +328,7 @@ export function AppConfigModal() {
             styles={{ body: { maxHeight: "72vh", overflowY: "auto", paddingRight: 12 } }}
             footer={null}
         >
-            <AppConfigPanel showDoneButton initialTab={configTab} />
+            <AppConfigPanel showDoneButton initialTab={managedMode && configTab === "channels" ? "preferences" : configTab} managedMode={managedMode} />
         </Modal>
     );
 }

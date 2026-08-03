@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
 import { Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, MessageSquare, Minus, Music2, Pencil, Plus, RefreshCw, Settings2, Trash2, Upload, Video } from "lucide-react";
 
@@ -29,11 +29,11 @@ type CanvasNodeHoverToolbarProps = {
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
     onUpscale: (node: CanvasNodeData) => void;
-    onSuperResolve: (node: CanvasNodeData) => void;
     onAngle: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
     onReversePrompt: (node: CanvasNodeData) => void;
     onRetry: (node: CanvasNodeData) => void;
+    onRegenerate?: (node: CanvasNodeData) => void;
     onToggleFreeResize: (node: CanvasNodeData) => void;
     onDelete: (node: CanvasNodeData) => void;
     extraTools?: CanvasNodeToolbarItem[];
@@ -67,11 +67,11 @@ export function CanvasNodeHoverToolbar({
     onCrop,
     onSplit,
     onUpscale,
-    onSuperResolve,
     onAngle,
     onViewImage,
     onReversePrompt,
     onRetry,
+    onRegenerate,
     onToggleFreeResize,
     onDelete,
     extraTools = [],
@@ -81,6 +81,8 @@ export function CanvasNodeHoverToolbar({
     const [draftImageToolIds, setDraftImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
     const [draftShowImageToolLabels, setDraftShowImageToolLabels] = useState(true);
     const [imageToolSettingsOpen, setImageToolSettingsOpen] = useState(false);
+    const toolbarRef = useRef<HTMLDivElement>(null);
+    const [toolbarPlacement, setToolbarPlacement] = useState({ left: 0, top: 0, mode: "above" as "above" | "below" | "inside", ready: false });
     const { message } = App.useApp();
     const copyText = useCopyText();
 
@@ -101,11 +103,53 @@ export function CanvasNodeHoverToolbar({
         setImageToolSettingsOpen(false);
     }, [node?.id]);
 
+    const rawLeft = node ? viewport.x + (node.position.x + node.width / 2) * viewport.k : 0;
+    const rawNodeTop = node ? viewport.y + node.position.y * viewport.k : 0;
+    const rawNodeBottom = node ? viewport.y + (node.position.y + node.height) * viewport.k : 0;
+
+    useLayoutEffect(() => {
+        const toolbar = toolbarRef.current;
+        const parent = toolbar?.offsetParent as HTMLElement | null;
+        if (!node || !toolbar || !parent) return;
+
+        const sync = () => {
+            const margin = 12;
+            const gap = 14;
+            const width = Math.min(toolbar.getBoundingClientRect().width, Math.max(1, parent.clientWidth - margin * 2));
+            const height = toolbar.getBoundingClientRect().height;
+            const minLeft = margin + width / 2;
+            const maxLeft = Math.max(minLeft, parent.clientWidth - margin - width / 2);
+            const left = Math.min(Math.max(rawLeft, minLeft), maxLeft);
+            const aboveTop = rawNodeTop - gap;
+            const belowTop = rawNodeBottom + gap;
+            let mode: "above" | "below" | "inside" = "above";
+            let top = aboveTop;
+            if (aboveTop - height < margin) {
+                if (belowTop + height <= parent.clientHeight - margin) {
+                    mode = "below";
+                    top = belowTop;
+                } else {
+                    mode = "inside";
+                    top = Math.min(Math.max(rawNodeTop, margin), Math.max(margin, parent.clientHeight - height - margin));
+                }
+            }
+            setToolbarPlacement((current) => (current.left === left && current.top === top && current.mode === mode && current.ready ? current : { left, top, mode, ready: true }));
+        };
+
+        sync();
+        const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : null;
+        observer?.observe(toolbar);
+        observer?.observe(parent);
+        window.addEventListener("resize", sync);
+        return () => {
+            observer?.disconnect();
+            window.removeEventListener("resize", sync);
+        };
+    }, [node, rawLeft, rawNodeBottom, rawNodeTop]);
+
     if (!node) return null;
 
     const activeNode = node;
-    const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
-    const top = viewport.y + node.position.y * viewport.k - 14;
     const isImage = node.type === CanvasNodeType.Image;
     const isVideo = node.type === CanvasNodeType.Video;
     const isAudio = node.type === CanvasNodeType.Audio;
@@ -116,6 +160,8 @@ export function CanvasNodeHoverToolbar({
     const isConfig = node.type === CanvasNodeType.Config;
     const canOpenDialog = isText || hasImage || isVideo;
     const canRetry = node.metadata?.status === "error";
+    const hasSubmittedAsyncJob = Boolean(node.metadata?.asyncJobId);
+    const asyncJobTerminal = ["failed", "refund_failed", "cancelled"].includes(node.metadata?.asyncJobStatus || "");
     const quickImageToolIdSet = new Set(quickImageToolIds);
     const copyImagePrompt = (target: CanvasNodeData) => {
         const prompt = target.metadata?.prompt?.trim();
@@ -125,7 +171,7 @@ export function CanvasNodeHoverToolbar({
         }
         copyText(prompt, "提示词已复制");
     };
-    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt });
+    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt });
 
     function openImageToolSettings() {
         onKeep(activeNode.id);
@@ -139,7 +185,20 @@ export function CanvasNodeHoverToolbar({
         { id: "delete", title: "移除节点", label: "删除", icon: <Trash2 className="size-4" />, onClick: () => onDelete(node), danger: true },
     ];
     const nodeToolbarTools: ToolbarTool[] = [
-        ...(canRetry ? [{ id: "retry", title: "重新生成", label: "重试", icon: <RefreshCw className="size-4" />, onClick: () => onRetry(node) }] : []),
+        ...(canRetry && (!hasSubmittedAsyncJob || !asyncJobTerminal)
+            ? [
+                  {
+                      id: "retry",
+                      title: hasSubmittedAsyncJob ? "恢复已提交的任务，不会重新计费" : "重新尝试生成",
+                      label: hasSubmittedAsyncJob ? "恢复任务" : "重试",
+                      icon: <RefreshCw className="size-4" />,
+                      onClick: () => onRetry(node),
+                  },
+              ]
+            : []),
+        ...(canRetry && hasSubmittedAsyncJob && onRegenerate
+            ? [{ id: "regenerate", title: "创建新的上游生成任务并重新计费", label: "重新生成", icon: <RefreshCw className="size-4" />, onClick: () => onRegenerate(node) }]
+            : []),
         ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: "加入我的资产", label: "存资产", icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
         ...(hasImage || hasVideo || hasAudio ? [{ id: "download", title: hasAudio ? "下载音频" : hasVideo ? "下载视频" : "下载图片", label: "下载", icon: <Download className="size-4" />, onClick: () => onDownload(node) }] : []),
         ...(canOpenDialog ? [{ id: "edit", title: "编辑", label: "编辑", icon: <MessageSquare className="size-4" />, onClick: () => onToggleDialog(node) }] : []),
@@ -155,6 +214,8 @@ export function CanvasNodeHoverToolbar({
     ];
     const toolbarTools = hasImage ? [...baseToolbarTools, ...nodeToolbarTools].filter((tool) => quickImageToolIdSet.has(tool.id as ImageQuickToolId)) : [...baseToolbarTools, ...nodeToolbarTools, ...extraTools];
     const selectableImageToolbarTools = [...baseToolbarTools, ...nodeToolbarTools].filter((tool) => tool.id !== "retry") as ImageToolbarSettingsTool[];
+    const showToolbarLabels = hasImage ? showImageToolLabels && toolbarTools.length <= 7 : toolbarTools.length <= 6;
+    const toolbarMaxWidth = showToolbarLabels ? "min(820px, calc(100% - 24px))" : "min(640px, calc(100% - 24px))";
 
     const closeImageToolSettings = () => {
         setImageToolSettingsOpen(false);
@@ -181,8 +242,15 @@ export function CanvasNodeHoverToolbar({
     return (
         <>
             <div
-                className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
-                style={{ left, top }}
+                ref={toolbarRef}
+                className="absolute z-[70] flex w-max flex-wrap items-center justify-center gap-0.5 overflow-visible rounded-[14px] border border-black/10 bg-white/96 px-1 py-1 text-[13px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)] backdrop-blur-sm"
+                style={{
+                    left: toolbarPlacement.ready ? toolbarPlacement.left : rawLeft,
+                    top: toolbarPlacement.ready ? toolbarPlacement.top : rawNodeTop - 14,
+                    maxWidth: toolbarMaxWidth,
+                    visibility: toolbarPlacement.ready ? "visible" : "hidden",
+                    transform: toolbarPlacement.mode === "above" ? "translate(-50%, -100%)" : "translateX(-50%)",
+                }}
                 onMouseEnter={() => onKeep(node.id)}
                 onMouseLeave={() => {
                     if (!imageToolSettingsOpen) onLeave();
@@ -191,9 +259,9 @@ export function CanvasNodeHoverToolbar({
                 onPointerDown={(event) => event.stopPropagation()}
             >
                 {toolbarTools.map((tool) => (
-                    <ToolbarAction key={tool.id} {...tool} showLabel={showImageToolLabels} />
+                    <ToolbarAction key={tool.id} {...tool} showLabel={showToolbarLabels} />
                 ))}
-                {hasImage ? <ToolbarAction id="more" title="配置快捷工具" label="更多" icon={<Ellipsis className="size-4" />} active={imageToolSettingsOpen} onClick={openImageToolSettings} showLabel={showImageToolLabels} /> : null}
+                {hasImage ? <ToolbarAction id="more" title="配置快捷工具" label="更多" icon={<Ellipsis className="size-4" />} active={imageToolSettingsOpen} onClick={openImageToolSettings} showLabel={showToolbarLabels} /> : null}
             </div>
             {hasImage ? (
                 <ImageToolSettingsModal
@@ -285,10 +353,10 @@ function ToolbarAction({ title, label, icon, onClick, showLabel, active = false,
     const hasText = showLabel && Boolean(label);
     return (
         <Tooltip title={title} placement="top" mouseEnterDelay={0.2} color="#ffffff" styles={{ root: { color: "#242529", boxShadow: "0 8px 24px rgba(15,23,42,.16)", fontSize: 13, fontWeight: 500 } }}>
-            <button type="button" className={`group relative flex h-12 items-center whitespace-nowrap px-1.5 ${danger ? "text-[#ef4444]" : ""}`} onClick={onClick} aria-label={title}>
-                <span className={`flex h-9 items-center ${hasText ? "gap-2 px-2.5" : "justify-center px-2"} rounded-lg transition group-hover:bg-[#f0f0f1] ${active ? "bg-[#eeeeef]" : ""}`}>
+            <button type="button" className={`group relative flex shrink-0 items-center whitespace-nowrap ${danger ? "text-[#ef4444]" : ""}`} onClick={onClick} aria-label={title}>
+                <span className={`flex min-h-8 items-center ${hasText ? "gap-1.5 px-2" : "min-w-8 justify-center px-1.5"} rounded-md text-[12px] transition group-hover:bg-[#f0f0f1] ${active ? "bg-[#eeeeef]" : ""}`}>
                     {icon}
-                    {hasText ? <span>{label}</span> : null}
+                    {hasText ? <span className="max-w-[88px] truncate">{label}</span> : null}
                 </span>
             </button>
         </Tooltip>

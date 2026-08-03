@@ -22,11 +22,12 @@ export function requestCreditUnits(options: { capability: ModelCapability; count
     return 1;
 }
 
-export function requestCreditCost(options: { channelMode: string; modelCosts?: ModelCreditCost[]; modelPricingRules?: Array<{ model: string; rules: StudioPricingRules }>; model: string; capability?: ModelCapability; count?: string | number; seconds?: string | number; quality?: string; size?: string; vquality?: string }) {
+export function requestCreditCost(options: { channelMode: string; modelCosts?: ModelCreditCost[]; modelPricingRules?: Array<{ model: string; rules: StudioPricingRules }>; model: string; capability?: ModelCapability; count?: string | number; seconds?: string | number; quality?: string; size?: string; imageResolution?: string; vquality?: string }) {
     const isStudioManaged = typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
-    if (options.channelMode !== "remote" && !isStudioManaged) return 0;
+    const hasManagedPricing = Boolean(options.modelCosts?.length || options.modelPricingRules?.length);
+    if (options.channelMode !== "remote" && !isStudioManaged && !hasManagedPricing) return 0;
     const capability = options.capability || "image";
     const units = requestCreditUnits({ capability, count: options.count, seconds: options.seconds });
-    const unitCost = pricingRuleUnitCost({ modelCosts: options.modelCosts, modelPricingRules: options.modelPricingRules, model: options.model, capability, quality: options.quality, size: options.size, vquality: options.vquality });
+    const unitCost = pricingRuleUnitCost({ modelCosts: options.modelCosts, modelPricingRules: options.modelPricingRules, model: options.model, capability, quality: options.quality, size: options.size, imageResolution: options.imageResolution, vquality: options.vquality });
     return unitCost * units;
 }

@@ -123,17 +123,32 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type StudioAsyncJob = {
+export type StudioAsyncJob = {
     jobId: string;
     status: "queued" | "running" | "succeeded" | "failed" | "refund_failed" | "cancelled";
     error?: string;
     resultReady?: boolean;
+    resultUrl?: string;
+    queueAhead?: number | null;
+    queuePosition?: number | null;
+};
+type StudioAsyncImage = { id: string; dataUrl: string };
+type StudioAsyncImageJobWaiter = {
+    promise: Promise<StudioAsyncImage[]>;
+    statusListeners: Set<(job: StudioAsyncJob) => void>;
 };
 type RequestOptions = {
     signal?: AbortSignal;
     requestId?: string;
+    idempotencyScope?: string;
+    resumeJobId?: string;
     onAsyncJobCreated?: (jobId: string) => void;
+    onAsyncJobStatus?: (job: StudioAsyncJob) => void;
 };
+
+// A canvas may resume the same persisted job after a focus change or reload.
+// Keep one network waiter per job so those resumes share one poll and one R2 read.
+const studioAsyncImageJobWaiters = new Map<string, StudioAsyncImageJobWaiter>();
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -142,6 +157,7 @@ const QUALITY_BASE: Record<string, number> = {
     standard: 1024,
     hd: 2048,
 };
+const IMAGE_RESOLUTION_LONG_EDGE: Record<string, number> = { "1k": 1024, "2k": 2048, "4k": 3840 };
 const QUALITY_ALIASES: Record<string, string> = {
     "1k": "low",
     "2k": "medium",
@@ -155,7 +171,6 @@ const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
-const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -163,24 +178,13 @@ function normalizeQuality(quality: string) {
     return QUALITY_BASE[normalized] ? normalized : undefined;
 }
 
-/** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
-function resolveSize(quality: string | undefined, ratio: string): string {
+/** Map the selected output resolution and aspect ratio to an explicit image size. */
+function resolveSize(imageResolution: string, ratio: string): string {
     const parsedRatio = parseImageRatio(ratio);
-    const basePixels = quality ? QUALITY_BASE[quality] : undefined;
     const isLandscape = parsedRatio.width >= parsedRatio.height;
     const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
-    let longSide: number;
-    let shortSide: number;
-
-    if (basePixels) {
-        const targetPixels = basePixels * basePixels;
-        const longSideRaw = Math.sqrt(targetPixels * longRatio);
-        longSide = Math.floor(longSideRaw / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-        shortSide = Math.round(longSide / longRatio / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    } else {
-        shortSide = DEFAULT_IMAGE_SHORT_SIDE;
-        longSide = Math.round((shortSide * longRatio) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    }
+    const longSide = IMAGE_RESOLUTION_LONG_EDGE[imageResolution] || DEFAULT_IMAGE_SHORT_SIDE;
+    const shortSide = Math.round(longSide / longRatio / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
 
     const width = isLandscape ? longSide : shortSide;
     const height = isLandscape ? shortSide : longSide;
@@ -213,15 +217,26 @@ function validateImageSize(width: number, height: number) {
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");
 }
 
-function resolveRequestSize(quality: string | undefined, size: string) {
-    const value = size.trim();
+function selectedImageResolution(config: AiConfig) {
+    const value = String(config.imageResolution || "")
+        .trim()
+        .toLowerCase();
+    if (value === "1k" || value === "2k" || value === "4k") return value;
+    const quality = normalizeQuality(config.quality);
+    if (quality === "low" || quality === "standard") return "1k";
+    if (quality === "high") return "4k";
+    return "2k";
+}
+
+function resolveRequestSize(config: AiConfig) {
+    const value = config.size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
     if (dimensions) {
         validateImageSize(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveSize(quality, value);
+    if (value.includes(":")) return resolveSize(selectedImageResolution(config), value);
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
@@ -230,7 +245,7 @@ function resolveGeminiImageConfig(config: AiConfig) {
     const dimensions = parseImageDimensions(value);
     const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
     const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
-    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions) : undefined;
+    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config, dimensions) : undefined;
     const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
     return Object.keys(image).length ? { responseFormat: { image } } : {};
 }
@@ -245,9 +260,9 @@ function closestGeminiAspectRatio(value: string) {
     });
 }
 
-function resolveGeminiImageSize(quality: string, dimensions: { width: number; height: number } | null) {
-    const normalizedQuality = normalizeQuality(quality);
-    if (normalizedQuality) return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
+function resolveGeminiImageSize(config: AiConfig, dimensions: { width: number; height: number } | null) {
+    const imageResolution = selectedImageResolution(config);
+    if (imageResolution) return imageResolution.toUpperCase();
     if (!dimensions) return undefined;
     const edge = Math.max(dimensions.width, dimensions.height);
     if (edge <= 768) return "512";
@@ -360,7 +375,7 @@ function usesStudioAsyncImages(config: AiConfig) {
 }
 
 function studioJobIdempotencyKey(options?: RequestOptions) {
-    return `${options?.requestId || "image"}:${nanoid()}`;
+    return `${options?.requestId || `image_${nanoid()}`}:${options?.idempotencyScope || "initial"}`;
 }
 
 function waitForStudioJobPoll(signal?: AbortSignal) {
@@ -369,49 +384,106 @@ function waitForStudioJobPoll(signal?: AbortSignal) {
             reject(new DOMException("请求已取消", "AbortError"));
             return;
         }
-        const timer = window.setTimeout(resolve, 1800);
-        signal?.addEventListener(
-            "abort",
-            () => {
-                window.clearTimeout(timer);
-                reject(new DOMException("请求已取消", "AbortError"));
-            },
-            { once: true },
-        );
+        const onAbort = () => {
+            window.clearTimeout(timer);
+            reject(new DOMException("请求已取消", "AbortError"));
+        };
+        const timer = window.setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, 1800);
+        signal?.addEventListener("abort", onAbort, { once: true });
     });
 }
 
-async function cancelStudioAsyncJob(jobId: string) {
-    try {
-        const response = await axios.post<{ status?: string }>(`/studio-api/jobs/${encodeURIComponent(jobId)}/cancel`, undefined, { timeout: 10000 });
-        return response.data.status || "not_found";
-    } catch {
-        return "not_found";
-    }
-}
-
-export async function fetchStudioAsyncImageJobResult(jobId: string) {
-    const response = await axios.get<ImageApiResponse>(`/studio-api/jobs/${encodeURIComponent(jobId)}/result`, { timeout: 120000 });
+export async function fetchStudioAsyncImageJobResult(jobId: string, resultUrl?: string): Promise<StudioAsyncImage[]> {
+    const response = await axios.get<ImageApiResponse>(resultUrl || `/studio-api/jobs/${encodeURIComponent(jobId)}/result`, { timeout: 120000 });
     return parseImagePayload(response.data);
 }
 
-export async function waitForStudioAsyncImageJob(jobId: string, options?: RequestOptions) {
-    const deadline = Date.now() + 15 * 60 * 1000;
+export async function fetchStudioAsyncImageJob(jobId: string) {
+    // Some embedded Chromium clients close idle requests after roughly 15 seconds.
+    // Finish before that boundary so a normal poll never turns into a client-side 499.
+    const response = await axios.get<{ job: StudioAsyncJob }>(`/studio-api/jobs/${encodeURIComponent(jobId)}?wait=10`, { timeout: 20000 });
+    return response.data.job;
+}
+
+function notifyStudioAsyncImageJobWaiter(waiter: StudioAsyncImageJobWaiter, job: StudioAsyncJob) {
+    waiter.statusListeners.forEach((listener) => listener(job));
+}
+
+async function waitForSharedStudioAsyncImageJob(jobId: string, waiter: StudioAsyncImageJobWaiter): Promise<StudioAsyncImage[]> {
     for (;;) {
-        if (options?.signal?.aborted) {
-            const status = await cancelStudioAsyncJob(jobId);
-            if (status !== "in_progress" && status !== "succeeded") throw new DOMException("请求已取消", "AbortError");
+        let job: StudioAsyncJob;
+        try {
+            job = await fetchStudioAsyncImageJob(jobId);
+        } catch (error) {
+            if (!isRetryableStudioJobPollError(error)) throw error;
+            await waitForStudioJobPoll();
+            continue;
         }
-        const response = await axios.get<{ job: StudioAsyncJob }>(`/studio-api/jobs/${encodeURIComponent(jobId)}`, { timeout: 20000 });
-        const job = response.data.job;
-        if (job.status === "succeeded") return fetchStudioAsyncImageJobResult(jobId);
+        notifyStudioAsyncImageJobWaiter(waiter, job);
+        if (job.status === "succeeded") {
+            try {
+                return await fetchStudioAsyncImageJobResult(jobId, job.resultUrl);
+            } catch (error) {
+                if (!isRetryableStudioJobPollError(error)) throw error;
+                await waitForStudioJobPoll();
+                continue;
+            }
+        }
         if (["failed", "refund_failed", "cancelled"].includes(job.status)) throw new Error(job.error || `图片任务${job.status}`);
-        if (Date.now() >= deadline) throw new Error("异步图片任务等待超时，任务仍会在后台继续，可刷新页面后恢复结果");
-        await waitForStudioJobPoll(options?.signal);
+        await waitForStudioJobPoll();
     }
 }
 
+function waitForStudioAsyncImageJobConsumer(promise: Promise<StudioAsyncImage[]>, signal?: AbortSignal) {
+    if (!signal) return promise;
+    return new Promise<StudioAsyncImage[]>((resolve, reject) => {
+        if (signal.aborted) {
+            reject(new DOMException("已停止在当前页面等待，后台原任务不会被重复提交", "AbortError"));
+            return;
+        }
+        const onAbort = () => reject(new DOMException("已停止在当前页面等待，后台原任务不会被重复提交", "AbortError"));
+        signal.addEventListener("abort", onAbort, { once: true });
+        promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+}
+
+export function waitForStudioAsyncImageJob(jobId: string, options?: RequestOptions) {
+    let waiter = studioAsyncImageJobWaiters.get(jobId);
+    if (!waiter) {
+        const statusListeners = new Set<(job: StudioAsyncJob) => void>();
+        waiter = { statusListeners, promise: Promise.resolve([]) };
+        waiter.promise = waitForSharedStudioAsyncImageJob(jobId, waiter);
+        studioAsyncImageJobWaiters.set(jobId, waiter);
+        void waiter.promise.then(
+            () => {
+                if (studioAsyncImageJobWaiters.get(jobId) === waiter) studioAsyncImageJobWaiters.delete(jobId);
+            },
+            () => {
+                if (studioAsyncImageJobWaiters.get(jobId) === waiter) studioAsyncImageJobWaiters.delete(jobId);
+            },
+        );
+    }
+    if (options?.onAsyncJobStatus) waiter.statusListeners.add(options.onAsyncJobStatus);
+    return waitForStudioAsyncImageJobConsumer(waiter.promise, options?.signal).finally(() => {
+        if (options?.onAsyncJobStatus) waiter.statusListeners.delete(options.onAsyncJobStatus);
+    });
+}
+
+function isRetryableStudioJobPollError(error: unknown) {
+    if (!axios.isAxiosError(error)) return false;
+    if (!error.response) return true;
+    const status = Number(error.response.status || 0);
+    return [408, 409, 425, 429].includes(status) || status >= 500;
+}
+
 async function createStudioAsyncImageJob(body: Record<string, unknown> | FormData, kind: "generations" | "edits", options?: RequestOptions) {
+    if (options?.resumeJobId) {
+        options.onAsyncJobCreated?.(options.resumeJobId);
+        return waitForStudioAsyncImageJob(options.resumeJobId, options);
+    }
     const idempotencyKey = studioJobIdempotencyKey(options);
     try {
         const response = await axios.post<{ job: StudioAsyncJob }>(`/studio-api/jobs/image/${kind}`, body, {
@@ -419,6 +491,7 @@ async function createStudioAsyncImageJob(body: Record<string, unknown> | FormDat
             timeout: 120000,
         });
         options?.onAsyncJobCreated?.(response.data.job.jobId);
+        options?.onAsyncJobStatus?.(response.data.job);
         return await waitForStudioAsyncImageJob(response.data.job.jobId, options);
     } catch (error) {
         if (axios.isAxiosError(error) && error.response?.status === 409) return null;
@@ -977,8 +1050,8 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(enrichModelError(requestConfig, readAxiosError(error, "??????"), "image"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const quality = normalizeQuality(requestConfig.quality);
+    const requestSize = resolveRequestSize(requestConfig);
     const requestBody: Record<string, unknown> = {
         model: requestConfig.model,
         prompt: withSystemPrompt(requestConfig, prompt),
@@ -1020,8 +1093,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
     if (isAgnesFormat(requestConfig)) {
         if (mask) throw new Error("Agnes image edit does not support masks yet");
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
+        const quality = normalizeQuality(requestConfig.quality);
+        const requestSize = resolveRequestSize(requestConfig);
         const requestBody: Record<string, unknown> = {
             model: requestConfig.model,
             prompt: withSystemPrompt(requestConfig, requestPrompt),
@@ -1047,8 +1120,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(enrichModelError(requestConfig, readAxiosError(error, "Request failed"), "image"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const quality = normalizeQuality(requestConfig.quality);
+    const requestSize = resolveRequestSize(requestConfig);
     const formData = new FormData();
     formData.set("model", requestConfig.model);
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));

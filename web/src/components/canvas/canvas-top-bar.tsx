@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload, WandSparkles } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
+import type { MenuProps } from "antd";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
+import { isStudioManagedHost } from "@/services/studio-managed";
 
 export function CanvasTopBar({
     title,
@@ -61,6 +63,7 @@ export function CanvasTopBar({
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const sidePanelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const toggleSidePanel = useCanvasSidePanelStore((state) => state.togglePanel);
+    const studioManaged = isStudioManagedHost();
 
     useEffect(() => {
         if (!isTitleEditing) return;
@@ -89,7 +92,7 @@ export function CanvasTopBar({
                     <Dropdown
                         trigger={["click"]}
                         menu={{
-                            items: [
+                            items: ([
                                 { key: "home", icon: <Home className="size-4" />, label: "主页", onClick: onHome },
                                 { key: "docs", icon: <BookOpen className="size-4" />, label: "文档", onClick: () => window.open(DOCS_URL, "_blank", "noopener,noreferrer") },
                                 { key: "projects", icon: <Images className="size-4" />, label: "我的画布", onClick: onProjects },
@@ -103,7 +106,10 @@ export function CanvasTopBar({
                                 { type: "divider" },
                                 { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: <MenuLabel text="撤销" shortcut="⌘ Z" />, onClick: onUndo },
                                 { key: "redo", disabled: !canRedo, icon: <Redo2 className="size-4" />, label: <MenuLabel text="重做" shortcut="⌘ ⇧ Z / ⌘ Y" />, onClick: onRedo },
-                            ],
+                            ] as NonNullable<MenuProps["items"]>).filter((item) => {
+                                if (!studioManaged || !item || !("key" in item)) return true;
+                                return !["docs", "workflow"].includes(String((item as { key?: unknown }).key));
+                            }),
                         }}
                     >
                         <button type="button" className="grid size-7 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label="打开画布菜单">

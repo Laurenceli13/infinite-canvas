@@ -123,7 +123,7 @@ export function CanvasNodeSplitDialog({ dataUrl, open, onClose, onConfirm }: { d
                             </div>
                         </div>
                         <Button type="primary" size="large" className="w-full" icon={<Grid2x2 className="size-4" />} onClick={() => onConfirm(confirmParams)}>
-                            生成子节点
+                            生成子节点（0.00 积分）
                         </Button>
                     </div>
                 </div>

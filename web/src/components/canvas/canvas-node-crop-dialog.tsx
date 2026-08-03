@@ -93,7 +93,7 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
                         取消
                     </Button>
                     <Button type="primary" icon={<Check className="size-4" />} onClick={() => onConfirm(crop)}>
-                        确认裁剪
+                        确认裁剪（0.00 积分）
                     </Button>
                 </div>
             </div>

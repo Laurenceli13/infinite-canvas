@@ -45,6 +45,7 @@ export function buildImageGenerationMetadata(type: CanvasImageGenerationType, co
         generationType: type,
         model: config.model,
         size: config.size,
+        imageResolution: config.imageResolution,
         quality: config.quality,
         ...(config.background ? { background: config.background } : {}),
         count,

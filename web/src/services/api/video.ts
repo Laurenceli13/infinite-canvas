@@ -62,20 +62,51 @@ function requestHeaders(config: AiConfig, options?: RequestOptions, contentType?
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
     options?.onTaskCreated?.(task);
+    return waitForVideoGenerationTask(config, task, options);
+}
+
+export async function waitForVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
     const delayMs = task.provider === "seedance" ? 5000 : task.provider === "agnes" ? 8000 : 2500;
     for (let attempt = 0; attempt < 120; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        const state = await pollVideoGenerationTask(config, task, options);
+        let state: VideoGenerationTaskState;
+        try {
+            state = await pollVideoGenerationTask(config, task, options);
+        } catch (error) {
+            if (!isRetryableVideoPollError(error) || options?.signal?.aborted) throw error;
+            await delay(delayMs, options?.signal);
+            continue;
+        }
         if (state.status === "completed") return state.result;
-        if (state.status === "failed") throw new Error(state.error);
+        if (state.status === "failed") throw new VideoTaskTerminalError(state.error);
         if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
         await delay(delayMs, options?.signal);
     }
     throw new Error("视频生成超时，请稍后重试");
 }
 
+function isRetryableVideoPollError(error: unknown) {
+    if (!axios.isAxiosError(error)) return false;
+    if (!error.response) return true;
+    const status = Number(error.response.status || 0);
+    return [408, 409, 425, 429].includes(status) || status >= 500;
+}
+
+export function isTerminalVideoTaskError(error: unknown) {
+    return error instanceof VideoTaskTerminalError;
+}
+
+class VideoTaskTerminalError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "VideoTaskTerminalError";
+    }
+}
+
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
-    const selectedModel = (config.model || config.videoModel).trim();
+    // A canvas can retain its previous image/text model in `model`; video requests
+    // must always prefer the explicitly selected video model.
+    const selectedModel = (config.videoModel || config.model).trim();
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     assertVideoConfig(requestConfig, requestConfig.model);
     if (isSeedanceVideoConfig(requestConfig)) {
@@ -154,9 +185,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
     try {
         const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
         if (video.status === "completed") {
-            const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
-            await assertVideoBlob(content.data);
-            return { status: "completed", result: { blob: content.data } };
+            return { status: "completed", result: await videoResultFromTask(config, task.id, options) };
         }
         if (video.status === "failed" || video.status === "cancelled") return { status: "failed", error: video.error?.message || "视频生成失败" };
         return { status: "pending" };
@@ -172,7 +201,7 @@ async function pollAgnesVideoTask(config: AiConfig, task: VideoGenerationTask, o
         if (status === "completed" || status === "succeeded" || status === "success") {
             const url = agnesVideoUrl(payload);
             if (!url) return { status: "failed", error: "Agnes 视频任务已完成，但没有返回视频地址" };
-            return { status: "completed", result: await videoResultFromUrl(url, options) };
+            return { status: "completed", result: await videoResultFromTask(config, task.id, options, url) };
         }
         if (status === "failed" || status === "error" || status === "cancelled") {
             return { status: "failed", error: agnesTaskError(payload) || "Agnes 视频生成失败" };
@@ -219,7 +248,7 @@ async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, opt
         if (state.status === "succeeded") {
             const url = state.content?.video_url;
             if (!url) return { status: "failed", error: "Seedance 任务成功但没有返回视频 URL" };
-            return { status: "completed", result: await videoResultFromUrl(url, options) };
+            return { status: "completed", result: await videoResultFromTask(config, task.id, options, url) };
         }
         if (state.status === "failed" || state.status === "cancelled" || state.status === "expired") return { status: "failed", error: state.error?.message || `Seedance 视频生成${state.status === "expired" ? "超时" : "失败"}` };
         return { status: "pending" };
@@ -304,6 +333,28 @@ async function videoResultFromUrl(url: string, options?: RequestOptions): Promis
     } catch (error) {
         if (axios.isCancel(error) || options?.signal?.aborted) throw error;
         return { url, mimeType: "video/mp4" };
+    }
+}
+
+async function videoResultFromTask(config: AiConfig, taskId: string, options?: RequestOptions, fallbackUrl?: string): Promise<VideoGenerationResult> {
+    // Studio owns the task and retrieves completed videos through its signed,
+    // same-origin asset route. Other deployments retain their direct provider flow.
+    const isStudioManaged = typeof window !== "undefined" && window.location.hostname.toLowerCase() === "studio.massmore.org";
+    if (!isStudioManaged) {
+        if (!fallbackUrl) {
+            const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${taskId}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
+            await assertVideoBlob(content.data);
+            return { blob: content.data };
+        }
+        return videoResultFromUrl(fallbackUrl, options);
+    }
+    try {
+        const content = await axios.get<Blob>(`${window.location.origin}/studio-api/v1/videos/${encodeURIComponent(taskId)}/content`, { responseType: "blob", signal: options?.signal });
+        await assertVideoBlob(content.data);
+        return { blob: content.data };
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        throw new Error(readAxiosError(error, "视频成品取回失败"));
     }
 }
 

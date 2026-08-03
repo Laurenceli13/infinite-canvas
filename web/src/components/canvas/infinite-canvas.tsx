@@ -8,6 +8,7 @@ type InfiniteCanvasProps = {
     containerRef: React.RefObject<HTMLDivElement | null>;
     viewport: ViewportTransform;
     backgroundMode?: CanvasBackgroundMode;
+    boxSelectMode?: boolean;
     onViewportChange: (viewport: ViewportTransform) => void;
     onCanvasMouseDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
     onCanvasDeselect?: () => void;
@@ -17,7 +18,7 @@ type InfiniteCanvasProps = {
     children: React.ReactNode;
 };
 
-export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
+export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines", boxSelectMode = false, onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const panState = useRef({
         isPanning: false,
@@ -90,7 +91,7 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
         if (target?.closest("[data-connection-create-menu]")) return;
         const isBackgroundClick = !target?.closest("[data-node-id],[data-connection-id]");
 
-        if (event.button === 0 && (event.ctrlKey || event.metaKey) && isBackgroundClick) {
+        if (event.button === 0 && (boxSelectMode || event.ctrlKey || event.metaKey) && isBackgroundClick) {
             event.preventDefault();
             event.currentTarget.setPointerCapture(event.pointerId);
             onCanvasMouseDown?.(event);
@@ -180,7 +181,7 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
     return (
         <div
             ref={containerRef}
-            className="relative h-full w-full cursor-grab select-none overflow-hidden"
+            className={`relative h-full w-full select-none overflow-hidden ${boxSelectMode ? "cursor-crosshair" : "cursor-grab"}`}
             style={{ background: theme.canvas.background }}
             onPointerDown={handlePointerDown}
             onDoubleClick={handleDoubleClick}

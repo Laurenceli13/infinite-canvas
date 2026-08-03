@@ -27,6 +27,8 @@ export const imageSizeTierItems = [
     { value: "4k", label: "4K" },
 ] as const;
 
+export const imageResolutionItems = imageSizeTierItems;
+
 export const videoResolutionItems = [
     { value: "480p", label: "480p" },
     { value: "720p", label: "720p" },
@@ -38,15 +40,10 @@ export function defaultPricingRules(capability: ModelCapability, creditCost = 0)
     if (capability === "image") {
         return {
             image: {
-                quality: {
-                    high: { enabled: true, credits: creditCost },
-                    medium: { enabled: true, credits: creditCost },
-                    low: { enabled: true, credits: creditCost },
-                },
                 size: {
-                    "1k": { enabled: true, credits: 0 },
-                    "2k": { enabled: true, credits: 0 },
-                    "4k": { enabled: true, credits: 0 },
+                    "1k": { enabled: true, credits: creditCost },
+                    "2k": { enabled: true, credits: creditCost },
+                    "4k": { enabled: true, credits: creditCost },
                 },
             },
         };
@@ -69,10 +66,23 @@ export function defaultPricingRules(capability: ModelCapability, creditCost = 0)
 export function normalizePricingRules(capability: ModelCapability, rules?: StudioPricingRules, creditCost = 0): StudioPricingRules {
     const defaults = defaultPricingRules(capability, creditCost);
     if (capability === "image") {
+        const legacyMediumCredits = Number(rules?.image?.quality?.medium?.credits ?? creditCost);
+        const legacySize = rules?.image?.size;
+        const hasLegacyQuality = Boolean(rules?.image?.quality);
+        const size = mergeEntries(defaults.image?.size, legacySize);
+        if (hasLegacyQuality) {
+            for (const item of imageSizeTierItems) {
+                const legacyEntry = legacySize?.[item.value];
+                const legacySurcharge = typeof legacyEntry === "number" ? legacyEntry : Number(legacyEntry?.credits || 0);
+                size[item.value] = {
+                    enabled: typeof legacyEntry === "number" ? true : legacyEntry?.enabled !== false,
+                    credits: legacyMediumCredits + legacySurcharge,
+                };
+            }
+        }
         return {
             image: {
-                quality: mergeEntries(defaults.image?.quality, rules?.image?.quality),
-                size: mergeEntries(defaults.image?.size, rules?.image?.size),
+                size,
             },
         };
     }
@@ -93,13 +103,6 @@ function mergeEntries<T extends string>(defaults?: Record<T, PricingEntry>, curr
         result[key] = typeof value === "number" ? { enabled: true, credits: value } : { enabled: value.enabled !== false, credits: Number(value.credits ?? base.credits ?? 0) };
     }
     return result;
-}
-
-export function enabledImageQualities(rules?: StudioPricingRules) {
-    const quality = rules?.image?.quality;
-    if (!quality) return ["auto", ...imageQualityItems.map((item) => item.value)];
-    const enabled = imageQualityItems.filter((item) => quality[item.value]?.enabled !== false).map((item) => item.value);
-    return ["auto", ...enabled];
 }
 
 export function enabledImageSizeTiers(rules?: StudioPricingRules) {
@@ -134,6 +137,14 @@ export function imageSizeTier(size: string) {
     return "1k";
 }
 
+export function normalizeImageResolution(value: string | undefined, fallback = "2k") {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (normalized === "1k" || normalized === "2k" || normalized === "4k") return normalized;
+    return fallback;
+}
+
 export function normalizedVideoResolution(value: string) {
     const raw = String(value || "720").toLowerCase();
     if (raw === "480" || raw === "480p" || raw === "low") return "480p";
@@ -142,16 +153,23 @@ export function normalizedVideoResolution(value: string) {
     return "720p";
 }
 
-export function pricingRuleUnitCost(options: { modelCosts?: Array<{ model: string; credits: number }>; modelPricingRules?: Array<{ model: string; rules: StudioPricingRules }>; model: string; capability: ModelCapability; quality?: string; size?: string; vquality?: string }) {
+export function pricingRuleUnitCost(options: {
+    modelCosts?: Array<{ model: string; credits: number }>;
+    modelPricingRules?: Array<{ model: string; rules: StudioPricingRules }>;
+    model: string;
+    capability: ModelCapability;
+    quality?: string;
+    size?: string;
+    imageResolution?: string;
+    vquality?: string;
+}) {
     const model = modelOptionName(options.model);
     const fallback = options.modelCosts?.find((item) => item.model === model)?.credits || 0;
-    const rules = modelPricingRules(options.modelPricingRules, model);
+    const configuredRules = modelPricingRules(options.modelPricingRules, model);
+    const rules = configuredRules ? normalizePricingRules(options.capability, configuredRules, fallback) : undefined;
     if (options.capability === "image" && rules?.image) {
-        const qualityKey = options.quality === "auto" ? "medium" : (options.quality || "medium");
-        const sizeKey = imageSizeTier(options.size || "auto");
-        const qualityCost = rules.image.quality?.[qualityKey as "high" | "medium" | "low"]?.enabled === false ? 0 : Number(rules.image.quality?.[qualityKey as "high" | "medium" | "low"]?.credits ?? fallback);
-        const sizeCost = rules.image.size?.[sizeKey as "1k" | "2k" | "4k"]?.enabled === false ? 0 : Number(rules.image.size?.[sizeKey as "1k" | "2k" | "4k"]?.credits ?? 0);
-        return qualityCost + sizeCost;
+        const sizeKey = options.imageResolution ? normalizeImageResolution(options.imageResolution) : imageSizeTier(options.size || "auto");
+        return Number(rules.image.size?.[sizeKey as "1k" | "2k" | "4k"]?.credits ?? fallback);
     }
     if (options.capability === "video" && rules?.video) {
         const resolution = normalizedVideoResolution(options.vquality || "720");

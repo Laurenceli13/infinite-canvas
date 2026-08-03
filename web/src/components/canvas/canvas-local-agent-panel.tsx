@@ -5,7 +5,12 @@ import copyToClipboard from "copy-to-clipboard";
 import { Copy, FolderOpen, History, KeyRound, Link2, LoaderCircle, PlugZap, Plus, RefreshCw, Square, Terminal, Trash2 } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { ModelPicker } from "@/components/model-picker";
+import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { randomId } from "@/lib/utils";
+import { requestImageQuestion, type AiTextMessage } from "@/services/api/image";
+import { isStudioManagedHost } from "@/services/studio-managed";
+import { useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { useShallow } from "zustand/react/shallow";
@@ -21,6 +26,9 @@ const AGENT_CONNECT_STEPS = [
     { title: "方式一：在 Codex 中使用插件", text: "在 Codex app 安装 Infinite Canvas 插件后，通过插件启动画布，插件会自动启动本地 Agent 并带上连接信息。" },
     { title: "方式二：直接运行 Agent", text: "不使用 Codex 插件时，在终端运行下面命令，再回到网页里连接或手动填入 Local URL 和 Connect token。", command: "npx -y @basketikun/canvas-agent" },
 ];
+const AGENT_PLUGIN_PREP_COMMAND = "git clone https://github.com/basketikun/infinite-canvas.git ~/plugins/infinite-canvas";
+const AGENT_PLUGIN_MARKETPLACE_COMMAND = "codex plugin marketplace add ~";
+const AGENT_PLUGIN_INSTALL_COMMAND = "codex plugin add infinite-canvas@personal";
 const AGENT_PLUGIN_REMOVE_COMMAND = "codex plugin remove infinite-canvas";
 const AGENT_MCP_REMOVE_COMMAND = "codex mcp remove infinite-canvas";
 
@@ -49,6 +57,8 @@ type AgentChatEvent = { threadId?: string; sourceClientId?: string; message?: Ag
 
 export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { embedded?: boolean; headless?: boolean; autoConnect?: boolean }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const effectiveConfig = useEffectiveConfig();
+    const studioManaged = isStudioManagedHost();
     const user = useUserStore((state) => state.user);
     const { message, modal } = App.useApp();
     const [searchParams] = useSearchParams();
@@ -93,10 +103,16 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     const connectedRef = useRef(false);
     const errorLoggedRef = useRef(false);
     const attachmentUrlsRef = useRef(new Set<string>());
+    const studioTurnControllerRef = useRef<AbortController | null>(null);
+    const studioDefaultTabSetRef = useRef(false);
     const clientIdRef = useRef(randomId());
     const loadThreadsSequenceRef = useRef(0);
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
+    const [studioModel, setStudioModel] = useState("");
+    const studioChatModel = studioModel || effectiveConfig.textModel || "";
+    const studioChatMode = studioManaged && !connected;
+    const studioChatCredits = requestCreditCost({ channelMode: effectiveConfig.channelMode, modelCosts: effectiveConfig.modelCosts, modelPricingRules: effectiveConfig.modelPricingRules, model: studioChatModel, capability: "text" });
     const loadThreads = useCallback(async (skipHistory = false) => {
         if (!connectedRef.current && !useAgentStore.getState().connected) return;
         const sequence = ++loadThreadsSequenceRef.current;
@@ -143,6 +159,16 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
         listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
     }, [messages, pendingTool, waiting]);
     useEffect(() => () => attachmentUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)), []);
+
+    useEffect(() => {
+        if (studioDefaultTabSetRef.current || !studioManaged || connected || activeTab !== "setup") return;
+        studioDefaultTabSetRef.current = true;
+        setAgentState({ activeTab: "chat" });
+    }, [activeTab, connected, setAgentState, studioManaged]);
+
+    useEffect(() => {
+        if (!studioModel && effectiveConfig.textModel) setStudioModel(effectiveConfig.textModel);
+    }, [effectiveConfig.textModel, studioModel]);
 
     useEffect(() => {
         if (!enabled || !token.trim()) return;
@@ -253,7 +279,80 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             document.removeEventListener("visibilitychange", activateVisible);
         };
     }, [connected, endpoint, token]);
+
+    const sendStudioPrompt = async () => {
+        const text = prompt.trim();
+        const files = attachments;
+        if (!studioChatModel || (!text && !files.length) || sending || waiting) return;
+        if (attachmentPayloadBytes(files) > MAX_ATTACHMENT_PAYLOAD_BYTES) {
+            addMessage({ role: "error", title: "图片过大", text: "图片附件超过 30MB，请删减后再发送。" });
+            return;
+        }
+        const controller = new AbortController();
+        studioTurnControllerRef.current = controller;
+        const userMessageId = createId();
+        const assistantMessageId = createId();
+        const userText = text || "发送了图片";
+        const requestConfig = { ...effectiveConfig, model: studioChatModel, textModel: studioChatModel };
+        const history: AiTextMessage[] = useAgentStore
+            .getState()
+            .messages
+            .filter((item) => (item.role === "user" || item.role === "assistant") && item.text)
+            .slice(-16)
+            .map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: item.text }));
+        const content: AiTextMessage["content"] = files.length ? [{ type: "text", text: userText }, ...files.map((item) => ({ type: "image_url" as const, image_url: { url: item.dataUrl } }))] : userText;
+        const messages: AiTextMessage[] = [{ role: "system", content: "你是 Studio 全站助手。简洁、准确地回答用户问题；不要声称执行了未实际执行的操作。" }, ...history, { role: "user", content }];
+        let responseText = "";
+        const updateAssistant = (nextText: string, streaming: boolean) => {
+            if (!nextText) return;
+            const current = useAgentStore.getState().messages;
+            const existing = current.find((item) => item.id === assistantMessageId);
+            const next = { id: assistantMessageId, role: "assistant" as const, title: "Studio 助手", text: nextText, ...(streaming ? { streamId: assistantMessageId } : {}) };
+            setAgentState({ messages: existing ? current.map((item) => (item.id === assistantMessageId ? next : item)) : [...current, next] });
+        };
+        setAgentState({ activity: "生成中", sending: true, waiting: true });
+        addMessage({ id: userMessageId, role: "user", text: userText, attachments: files });
+        // The message has been accepted locally. Clear the composer before the
+        // network round trip so a retry cannot accidentally send it twice.
+        setAgentState({ prompt: "", attachments: [] });
+        try {
+            const answer = await requestImageQuestion(
+                requestConfig,
+                messages,
+                (text) => {
+                    // requestImageQuestion reports the complete streamed text,
+                    // rather than only the newest token.
+                    responseText = text;
+                    updateAssistant(responseText, true);
+                },
+                { signal: controller.signal },
+            );
+            updateAssistant(responseText || answer, false);
+            setAgentState({ activity: "完成" });
+        } catch (error) {
+            if (controller.signal.aborted) {
+                if (responseText) updateAssistant(responseText, false);
+                else addMessage({ role: "system", text: "已停止本次对话。" });
+            } else {
+                const errorText = error instanceof Error ? error.message : "发送失败";
+                addMessage({ role: "error", title: "发送失败", text: errorText });
+                setAgentState({ activity: "发送失败" });
+            }
+        } finally {
+            files.forEach((item) => {
+                URL.revokeObjectURL(item.url);
+                attachmentUrlsRef.current.delete(item.url);
+            });
+            if (studioTurnControllerRef.current === controller) studioTurnControllerRef.current = null;
+            setAgentState({ sending: false, waiting: false });
+        }
+    };
+
     const sendPrompt = async () => {
+        if (studioChatMode) {
+            await sendStudioPrompt();
+            return;
+        }
         const text = prompt.trim();
         const files = attachments;
         const requestPrompt = promptWithAttachments(text, files);
@@ -298,6 +397,10 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     };
 
     const stopTurn = async () => {
+        if (studioChatMode) {
+            studioTurnControllerRef.current?.abort();
+            return;
+        }
         if (!connected || (!sending && !waiting)) return;
         setAgentState({ activity: "停止中" });
         try {
@@ -590,8 +693,8 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                 value={activeTab}
                 theme={theme}
                 items={[
-                    { value: "setup", label: "连接", icon: <PlugZap className="size-3.5" /> },
-                    { value: "chat", label: "对话" },
+                    { value: "setup", label: studioManaged ? "连接 Codex" : "连接", icon: <PlugZap className="size-3.5" /> },
+                    { value: "chat", label: studioManaged ? "Studio 对话" : "对话" },
                     { value: "history", label: "历史", icon: <History className="size-3.5" />, count: threads.length },
                     { value: "log", label: "日志", icon: <Terminal className="size-3.5" />, count: eventLogs.length },
                 ]}
@@ -664,9 +767,9 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                     <AgentChatComposer
                         prompt={prompt}
                         attachments={attachments.map(agentAttachmentToChatAttachment)}
-                        disabled={!connected}
+                        disabled={(!connected && !studioChatMode) || (studioChatMode && !studioChatModel)}
                         sending={sending || waiting}
-                        placeholder="询问 Codex，或让它操作网站/画布"
+                        placeholder={studioChatMode ? "向 Studio 助手提问" : "询问 Codex，或让它操作网站/画布"}
                         theme={theme}
                         onPromptChange={(prompt) => setAgentState({ prompt })}
                         onSubmit={sendPrompt}
@@ -674,7 +777,19 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                         onAddFiles={addAttachments}
                         onRemoveAttachment={removeAttachment}
                         left={
-                            attachments.length ? (
+                            studioChatMode ? (
+                                <>
+                                    <ModelPicker config={effectiveConfig} value={studioChatModel} onChange={setStudioModel} capability="text" className="h-8 max-w-[180px]" />
+                                    <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium tabular-nums" style={{ color: theme.node.muted }}>
+                                        <CreditSymbol /> {studioChatCredits.toFixed(2)}
+                                    </span>
+                                    {attachments.length ? (
+                                        <span className="shrink-0 text-[11px]" style={{ color: theme.node.muted }}>
+                                            {formatBytes(attachmentPayloadBytes(attachments))} / 30MB
+                                        </span>
+                                    ) : null}
+                                </>
+                            ) : attachments.length ? (
                                 <span className="text-[11px]" style={{ color: theme.node.muted }}>
                                     {formatBytes(attachmentPayloadBytes(attachments))} / 30MB
                                 </span>
@@ -792,28 +907,52 @@ function AgentConnectView({
         copyToClipboard(command);
         message.success("命令已复制");
     };
-    const codexPluginReminder = (
+    const renderCommandGroup = (title: string, items: { label: string; command: string }[]) => (
         <div className="rounded-lg border px-3 py-2.5 text-xs leading-5" style={{ borderColor: theme.node.stroke, color: theme.node.muted }}>
             <div className="font-medium" style={{ color: theme.node.text }}>
-                Codex 插件提醒
+                {title}
             </div>
-            <div className="mt-1">只有安装 Codex 插件或手动添加 MCP 后，工具列表才会进入 Codex 上下文并增加 token 消耗；仅运行 `npx -y @basketikun/canvas-agent` 启动本地 Agent 不会安装 MCP。</div>
             <div className="mt-2 grid gap-1.5">
-                {[
-                    ["移除插件", AGENT_PLUGIN_REMOVE_COMMAND],
-                    ["移除手动 MCP", AGENT_MCP_REMOVE_COMMAND],
-                ].map(([label, command]) => (
-                    <div key={command} className="flex items-center gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                {items.map((item) => (
+                    <div key={item.command} className="flex items-center gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
                         <span className="shrink-0 text-[11px]" style={{ color: theme.node.muted }}>
-                            {label}
+                            {item.label}
                         </span>
-                        <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] leading-5">{command}</code>
+                        <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] leading-5">{item.command}</code>
                         <Tooltip title="复制命令">
-                            <Button size="small" type="text" className="!h-6 !w-6 !min-w-6" icon={<Copy className="size-3.5" />} onClick={() => copyCommand(command)} />
+                            <Button size="small" type="text" className="!h-6 !w-6 !min-w-6" icon={<Copy className="size-3.5" />} onClick={() => copyCommand(item.command)} />
                         </Tooltip>
                     </div>
                 ))}
             </div>
+        </div>
+    );
+    const codexPluginReminder = (
+        <div className="grid gap-3">
+            <div className="rounded-lg border px-3 py-2.5 text-xs leading-5" style={{ borderColor: theme.node.stroke, color: theme.node.muted }}>
+                <div className="font-medium" style={{ color: theme.node.text }}>
+                    Codex 插件安装说明
+                </div>
+                <div className="mt-1">第一次安装时，先把 Infinite Canvas 仓库放到 Codex personal marketplace 的默认目录，再执行插件安装命令。</div>
+                <div className="mt-2 rounded-md border px-2.5 py-2" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                    安装完成后建议新开一个 Codex 对话，再直接对 Codex 说“打开 Infinite Canvas 新建画布 并连接好Codex”。
+                </div>
+            </div>
+            {renderCommandGroup("首次准备", [{ label: "克隆插件仓库", command: AGENT_PLUGIN_PREP_COMMAND }])}
+            {renderCommandGroup("安装插件", [
+                { label: "添加 personal marketplace", command: AGENT_PLUGIN_MARKETPLACE_COMMAND },
+                { label: "安装 Infinite Canvas", command: AGENT_PLUGIN_INSTALL_COMMAND },
+            ])}
+            <div className="rounded-lg border px-3 py-2.5 text-xs leading-5" style={{ borderColor: theme.node.stroke, color: theme.node.muted }}>
+                <div className="font-medium" style={{ color: theme.node.text }}>
+                    Codex 插件提醒
+                </div>
+                <div className="mt-1">只有安装 Codex 插件或手动添加 MCP 后，工具列表才会进入 Codex 上下文并增加 token 消耗；仅运行 `npx -y @basketikun/canvas-agent` 启动本地 Agent 不会安装 MCP。</div>
+            </div>
+            {renderCommandGroup("卸载与清理", [
+                { label: "移除插件", command: AGENT_PLUGIN_REMOVE_COMMAND },
+                { label: "移除手动 MCP", command: AGENT_MCP_REMOVE_COMMAND },
+            ])}
         </div>
     );
     return (
@@ -825,12 +964,12 @@ function AgentConnectView({
                         按使用场景选择一种连接方式。
                     </div>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-3">
                     {AGENT_CONNECT_STEPS.map((step, index) => {
                         const command = "command" in step ? step.command : "";
                         return (
                             <Fragment key={step.title}>
-                                <div className="rounded-lg px-3 py-2.5">
+                                <div className="rounded-lg border px-3 py-2.5" style={{ borderColor: theme.node.stroke }}>
                                     <div className="text-sm font-medium leading-5">{step.title}</div>
                                     <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
                                         {step.text}

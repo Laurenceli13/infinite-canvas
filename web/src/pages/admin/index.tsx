@@ -1,13 +1,15 @@
 import { App, Button, Card, Collapse, DatePicker, Form, Input, InputNumber, Popconfirm, Segmented, Select, Space, Switch, Table, Tabs, Tag, Tooltip } from "antd";
+import { GripVertical, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { defaultPricingRules, imageQualityItems, imageSizeTierItems, normalizePricingRules, videoResolutionItems, type PricingEntry, type StudioPricingRules } from "@/lib/studio-pricing";
+import { defaultPricingRules, imageSizeTierItems, normalizePricingRules, videoResolutionItems, type PricingEntry, type StudioPricingRules } from "@/lib/studio-pricing";
 import { createDefaultStudioProviderAdvancedConfig, createStudioProviderPayloadDefaults, type StudioProviderProtocolTemplate } from "@/services/studio-managed.provider-config";
 import {
     createStudioModel,
     createStudioProvider,
     deleteStudioModel,
     deleteStudioProvider,
+    discoverStudioProviderModels,
     fetchStudioConcurrency,
     fetchStudioAdminModels,
     fetchStudioAdminWorkflows,
@@ -16,13 +18,17 @@ import {
     fetchStudioWorkflowUsers,
     refundStudioUsage,
     resetStudioUserConcurrency,
+    testStudioModel,
+    testStudioProvider,
     updateStudioModel,
+    updateStudioModelFailover,
     updateStudioConcurrencySettings,
     updateStudioProvider,
     updateStudioUsageReport,
     updateStudioUserConcurrency,
     updateStudioWorkflow,
     type StudioModel,
+    type StudioDiscoveredModel,
     type StudioConcurrencyConfig,
     type StudioConcurrencyUser,
     type StudioProvider,
@@ -85,6 +91,7 @@ const ADMIN_COPY: Record<
             modeAsync: string;
             modeSync: string;
             edit: string;
+            test: string;
             delete: string;
             deleteConfirm: string;
             messages: {
@@ -96,6 +103,7 @@ const ADMIN_COPY: Record<
                 saveError: string;
                 toggleError: string;
                 deleteError: string;
+                testError: string;
             };
             protocolOptions: Record<StudioProviderProtocolTemplate, string>;
             authOptions: { bearer: string; header: string; query: string };
@@ -106,6 +114,9 @@ const ADMIN_COPY: Record<
             cancel: string;
             provider: string;
             modelId: string;
+            discoverModels: string;
+            discoveredModels: string;
+            discoverHint: string;
             displayName: string;
             capability: string;
             creditCost: string;
@@ -113,16 +124,26 @@ const ADMIN_COPY: Record<
             create: string;
             save: string;
             catalogTitle: string;
+            failoverTitle: string;
+            failoverSubtitle: string;
+            failoverEnabled: string;
+            routeOrder: string;
+            addRoute: string;
+            saveFailover: string;
+            selectRoute: string;
+            noRoutes: string;
+            dragHint: string;
             columns: { model: string; displayName: string; provider: string; capability: string; credits: string; enabled: string; actions: string };
             edit: string;
+            test: string;
             delete: string;
             deleteConfirm: string;
-            messages: { loadError: string; createSuccess: string; updateSuccess: string; deleteSuccess: string; createError: string; updateCreditError: string; updateStatusError: string; deleteError: string };
+            messages: { loadError: string; createSuccess: string; updateSuccess: string; deleteSuccess: string; createError: string; updateCreditError: string; updateStatusError: string; deleteError: string; testError: string; discoverError: string; failoverSaved: string; failoverError: string };
         };
         usage: {
             title: string;
             refresh: string;
-            columns: { time: string; source: string; user: string; model: string; capability: string; quantity: string; credits: string; elapsed: string; balanceDelta: string; status: string; error: string };
+            columns: { time: string; source: string; user: string; provider: string; model: string; capability: string; quantity: string; credits: string; elapsed: string; balanceDelta: string; status: string; error: string };
             messages: { loadError: string };
         };
     }
@@ -169,6 +190,7 @@ const ADMIN_COPY: Record<
             modeAsync: "异步",
             modeSync: "同步",
             edit: "编辑",
+            test: "测链",
             delete: "删除",
             deleteConfirm: "确认删除这个供应商？它下面的模型也会一起删除。",
             messages: {
@@ -180,6 +202,7 @@ const ADMIN_COPY: Record<
                 saveError: "保存供应商失败",
                 toggleError: "更新供应商状态失败",
                 deleteError: "删除供应商失败",
+                testError: "供应商测链失败",
             },
             protocolOptions: {
                 openai: "OpenAI 兼容",
@@ -196,6 +219,9 @@ const ADMIN_COPY: Record<
             cancel: "取消编辑",
             provider: "所属供应商",
             modelId: "模型 ID",
+            discoverModels: "获取上游模型",
+            discoveredModels: "选择上游返回的模型",
+            discoverHint: "使用当前供应商的 Base URL 和 API Key 实时获取，不会发起生成或产生模型费用。",
             displayName: "显示名称",
             capability: "能力类型",
             creditCost: "积分消耗",
@@ -203,8 +229,18 @@ const ADMIN_COPY: Record<
             create: "创建模型",
             save: "保存模型",
             catalogTitle: "模型目录",
+            failoverTitle: "自动轮询",
+            failoverSubtitle: "为同一个用户可见模型设置供应商调用顺序。限流、超时、网络错误或可重试的上游错误会自动切换，用户端仍只显示模型名称。",
+            failoverEnabled: "启用自动轮询",
+            routeOrder: "供应商调用顺序",
+            addRoute: "添加供应商",
+            saveFailover: "保存轮询设置",
+            selectRoute: "选择供应商 / 上游模型 ID",
+            noRoutes: "尚未添加供应商路由",
+            dragHint: "拖动左侧手柄调整调用顺序；同一供应商只能添加一次。",
             columns: { model: "模型", displayName: "显示名称", provider: "供应商", capability: "能力", credits: "积分", enabled: "启用", actions: "操作" },
             edit: "编辑",
+            test: "测试",
             delete: "删除",
             deleteConfirm: "确认删除这个模型？",
             messages: {
@@ -216,12 +252,16 @@ const ADMIN_COPY: Record<
                 updateCreditError: "更新积分消耗失败",
                 updateStatusError: "更新模型状态失败",
                 deleteError: "删除模型失败",
+                testError: "模型测试失败",
+                discoverError: "获取上游模型失败",
+                failoverSaved: "自动轮询设置已保存",
+                failoverError: "保存自动轮询设置失败",
             },
         },
         usage: {
             title: "近期使用记录",
             refresh: "刷新",
-            columns: { time: "时间", source: "来源", user: "用户", model: "模型", capability: "能力", quantity: "数量", credits: "消耗积分", elapsed: "耗时", balanceDelta: "余额变化", status: "状态", error: "错误信息" },
+            columns: { time: "时间", source: "来源", user: "用户", provider: "供应商", model: "模型", capability: "能力", quantity: "数量", credits: "消耗积分", elapsed: "耗时", balanceDelta: "余额变化", status: "状态", error: "错误信息" },
             messages: { loadError: "加载使用记录失败" },
         },
     },
@@ -267,6 +307,7 @@ const ADMIN_COPY: Record<
             modeAsync: "Async",
             modeSync: "Sync",
             edit: "Edit",
+            test: "Test link",
             delete: "Delete",
             deleteConfirm: "Delete this provider? Its models will be deleted too.",
             messages: {
@@ -278,6 +319,7 @@ const ADMIN_COPY: Record<
                 saveError: "Failed to save provider",
                 toggleError: "Failed to update provider",
                 deleteError: "Failed to delete provider",
+                testError: "Provider connection test failed",
             },
             protocolOptions: {
                 openai: "OpenAI Compatible",
@@ -294,6 +336,9 @@ const ADMIN_COPY: Record<
             cancel: "Cancel",
             provider: "Provider",
             modelId: "Model ID",
+            discoverModels: "Fetch Upstream Models",
+            discoveredModels: "Select an upstream model",
+            discoverHint: "Fetches the live model catalog using this provider's Base URL and API Key. It does not generate content or incur model cost.",
             displayName: "Display Name",
             capability: "Capability",
             creditCost: "Credit Cost",
@@ -301,8 +346,18 @@ const ADMIN_COPY: Record<
             create: "Create Model",
             save: "Save Model",
             catalogTitle: "Model Catalog",
+            failoverTitle: "Automatic Failover",
+            failoverSubtitle: "Set the provider order for each user-visible model. Retryable upstream errors, rate limits, network failures, and timeouts switch to the next route while users continue to see only the model name.",
+            failoverEnabled: "Enable automatic failover",
+            routeOrder: "Provider order",
+            addRoute: "Add provider",
+            saveFailover: "Save failover settings",
+            selectRoute: "Select provider / upstream model ID",
+            noRoutes: "No provider routes added",
+            dragHint: "Drag the handle to reorder routes. A provider can appear only once.",
             columns: { model: "Model", displayName: "Display Name", provider: "Provider", capability: "Capability", credits: "Credits", enabled: "Enabled", actions: "Actions" },
             edit: "Edit",
+            test: "Test",
             delete: "Delete",
             deleteConfirm: "Delete this model?",
             messages: {
@@ -314,12 +369,16 @@ const ADMIN_COPY: Record<
                 updateCreditError: "Failed to update model credit cost",
                 updateStatusError: "Failed to update model status",
                 deleteError: "Failed to delete model",
+                testError: "Model test failed",
+                discoverError: "Failed to fetch upstream models",
+                failoverSaved: "Automatic failover settings saved",
+                failoverError: "Failed to save automatic failover settings",
             },
         },
         usage: {
             title: "Recent Usage",
             refresh: "Refresh",
-            columns: { time: "Time", source: "Source", user: "User", model: "Model", capability: "Capability", quantity: "Quantity", credits: "Credits", elapsed: "Elapsed", balanceDelta: "Balance Delta", status: "Status", error: "Error" },
+            columns: { time: "Time", source: "Source", user: "User", provider: "Provider", model: "Model", capability: "Capability", quantity: "Quantity", credits: "Credits", elapsed: "Elapsed", balanceDelta: "Balance Delta", status: "Status", error: "Error" },
             messages: { loadError: "Failed to load usage" },
         },
     },
@@ -497,18 +556,17 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
         }
     };
 
-    const maxLimit = config?.maxLimit || 64;
     return (
         <div className="space-y-4">
             <Card title={locale === "zh" ? "Studio 并发总控" : "Studio concurrency control"}>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,220px)_minmax(0,220px)_auto] lg:items-end">
                     <div>
                         <div className="mb-1 text-sm text-stone-500">{locale === "zh" ? "全站同时运行任务总数" : "Total running jobs"}</div>
-                        <InputNumber className="w-full" min={1} max={config?.globalMaxLimit || 64} precision={0} value={globalDraft} onChange={(value) => setGlobalDraft(Number(value || 1))} />
+                        <InputNumber className="w-full" min={1} precision={0} value={globalDraft} onChange={(value) => setGlobalDraft(Number(value || 1))} />
                     </div>
                     <div>
                         <div className="mb-1 text-sm text-stone-500">{locale === "zh" ? "默认每用户同时运行任务数" : "Default running jobs per user"}</div>
-                        <InputNumber className="w-full" min={1} max={maxLimit} precision={0} value={defaultDraft} onChange={(value) => setDefaultDraft(Number(value || 1))} />
+                        <InputNumber className="w-full" min={1} precision={0} value={defaultDraft} onChange={(value) => setDefaultDraft(Number(value || 1))} />
                     </div>
                     <Button type="primary" loading={savingKey === "defaults"} onClick={() => void saveDefaults()}>
                         {locale === "zh" ? "保存统一设置" : "Save limits"}
@@ -517,12 +575,12 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
                 <div className="mt-3 flex flex-wrap gap-2 text-sm">
                     <Tag color="blue">{locale === "zh" ? `正在运行 ${config?.runningTotal || 0}` : `Running ${config?.runningTotal || 0}`}</Tag>
                     <Tag>{locale === "zh" ? `排队 ${config?.queuedTotal || 0}` : `Queued ${config?.queuedTotal || 0}`}</Tag>
-                    <Tag>{locale === "zh" ? `执行器上限 ${config?.globalMaxLimit || 64}` : `Executor max ${config?.globalMaxLimit || 64}`}</Tag>
+                    <Tag>{locale === "zh" ? "执行器不设固定上限" : "No fixed executor cap"}</Tag>
                 </div>
                 <p className="mt-3 text-sm text-stone-500">
                     {locale === "zh"
-                        ? "总上限保护服务器和传输链路；默认每用户上限统一应用于所有用户，单独设置后以用户值为准。这里只限制 Studio 调度，不修改 MassMore、Mtline 或现有 Cloudflare Worker。"
-                        : "The total cap protects the server and transport path. The per-user default applies to everyone unless overridden. This only controls Studio scheduling and does not modify MassMore, Mtline, or existing Cloudflare Workers."}
+                        ? "全站值和每用户值直接控制 Studio 调度；压测时请逐步提高并观察服务器、上游和队列状态。这里不修改 MassMore、Mtline 或现有 Cloudflare Worker。"
+                        : "The global and per-user values directly control Studio scheduling. Increase them gradually while observing the server, upstreams, and queue. This does not modify MassMore, Mtline, or existing Cloudflare Workers."}
                 </p>
             </Card>
             <Card
@@ -559,7 +617,7 @@ function ConcurrencyTab({ locale }: { locale: StudioLocale }) {
                             width: 140,
                             render: (_, user) => {
                                 const key = userKey(user);
-                                return <InputNumber min={1} max={maxLimit} precision={0} value={userDrafts[key]} onChange={(value) => setUserDrafts((current) => ({ ...current, [key]: Number(value || 1) }))} />;
+                                return <InputNumber min={1} precision={0} value={userDrafts[key]} onChange={(value) => setUserDrafts((current) => ({ ...current, [key]: Number(value || 1) }))} />;
                             },
                         },
                         {
@@ -712,6 +770,7 @@ function ProvidersTab({ locale }: { locale: StudioLocale }) {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [updatingProviderIds, setUpdatingProviderIds] = useState<number[]>([]);
+    const [testingProviderIds, setTestingProviderIds] = useState<number[]>([]);
     const [editingProviderId, setEditingProviderId] = useState<number | null>(null);
     const [form] = Form.useForm<ProviderFormValues>();
 
@@ -873,6 +932,20 @@ function ProvidersTab({ locale }: { locale: StudioLocale }) {
         }
     };
 
+    const testProvider = async (provider: StudioProvider) => {
+        setTestingProviderIds((current) => [...current, provider.id]);
+        try {
+            const result = await testStudioProvider(provider.id);
+            const text = result.message || `HTTP ${result.statusCode || "-"}`;
+            if (result.ok) message.success(text);
+            else message.error(text);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : copy.messages.testError);
+        } finally {
+            setTestingProviderIds((current) => current.filter((id) => id !== provider.id));
+        }
+    };
+
     return (
         <div className="grid gap-4 xl:grid-cols-[460px_1fr]">
             <Card title={editingProviderId ? copy.editTitle : copy.createTitle} extra={editingProviderId ? <Button onClick={resetProviderForm}>{copy.cancel}</Button> : null}>
@@ -1016,6 +1089,9 @@ function ProvidersTab({ locale }: { locale: StudioLocale }) {
                             title: copy.columns.actions,
                             render: (_, item) => (
                                 <Space>
+                                    <Button size="small" loading={testingProviderIds.includes(item.id)} onClick={() => void testProvider(item)}>
+                                        {copy.test}
+                                    </Button>
                                     <Button size="small" onClick={() => beginEdit(item)}>
                                         {copy.edit}
                                     </Button>
@@ -1034,6 +1110,11 @@ function ProvidersTab({ locale }: { locale: StudioLocale }) {
     );
 }
 
+type ModelFailoverDraft = {
+    enabled: boolean;
+    routeModelIds: number[];
+};
+
 function ModelsTab({ locale }: { locale: StudioLocale }) {
     const { message } = App.useApp();
     const copy = ADMIN_COPY[locale].models;
@@ -1043,8 +1124,15 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
     const [modelCreditDrafts, setModelCreditDrafts] = useState<Record<string, number>>({});
     const [modelPricingDrafts, setModelPricingDrafts] = useState<Record<string, StudioPricingRules>>({});
     const [updatingModelKeys, setUpdatingModelKeys] = useState<string[]>([]);
+    const [testingModelKeys, setTestingModelKeys] = useState<string[]>([]);
+    const [discoveredModels, setDiscoveredModels] = useState<StudioDiscoveredModel[]>([]);
+    const [discoveringModels, setDiscoveringModels] = useState(false);
+    const [failoverDrafts, setFailoverDrafts] = useState<Record<number, ModelFailoverDraft>>({});
+    const [savingFailoverIds, setSavingFailoverIds] = useState<number[]>([]);
     const [editingModelId, setEditingModelId] = useState<number | null>(null);
     const [form] = Form.useForm();
+    const selectedProviderId = Form.useWatch("providerId", form) as number | undefined;
+    const selectedModelId = Form.useWatch("model", form) as string | undefined;
 
     const modelKeyFor = (item: StudioModel) => String(item.rowId || item.model);
 
@@ -1056,6 +1144,13 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
             setModels(nextModels);
             setModelCreditDrafts(Object.fromEntries(nextModels.map((item) => [modelKeyFor(item), Number(item.creditCost || 0)])));
             setModelPricingDrafts(Object.fromEntries(nextModels.map((item) => [modelKeyFor(item), normalizePricingRules(item.capability, item.pricingRules, Number(item.creditCost || 0))])));
+            setFailoverDrafts(
+                Object.fromEntries(
+                    nextModels
+                        .filter((item) => item.rowId)
+                        .map((item) => [item.rowId as number, { enabled: Boolean(item.failoverEnabled), routeModelIds: item.failoverRouteModelIds || [] }]),
+                ),
+            );
         } catch (error) {
             message.error(error instanceof Error ? error.message : copy.messages.loadError);
         } finally {
@@ -1067,21 +1162,51 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
         void load();
     }, []);
 
+    useEffect(() => {
+        setDiscoveredModels([]);
+    }, [selectedProviderId]);
+
     const resetModelForm = () => {
         setEditingModelId(null);
+        setDiscoveredModels([]);
         form.resetFields();
-        form.setFieldsValue({ capability: "image", creditCost: 0, enabled: true });
+        form.setFieldsValue({ capability: "image", creditCost: 0, pricingRules: defaultPricingRules("image", 0), enabled: true });
     };
 
-    const submitModel = async (values: { providerId: number; model: string; displayName?: string; capability: ModelCapability; creditCost?: number; enabled?: boolean }) => {
+    const discoverModels = async () => {
+        const providerId = Number(form.getFieldValue("providerId") || 0);
+        if (!providerId) return;
+        setDiscoveringModels(true);
         try {
+            const nextModels = await discoverStudioProviderModels(providerId);
+            if (Number(form.getFieldValue("providerId") || 0) !== providerId) return;
+            setDiscoveredModels(nextModels);
+            message.success(locale === "zh" ? `已获取 ${nextModels.length} 个上游模型` : `Fetched ${nextModels.length} upstream models`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : copy.messages.discoverError);
+        } finally {
+            setDiscoveringModels(false);
+        }
+    };
+
+    const chooseDiscoveredModel = (modelId: string) => {
+        const selected = discoveredModels.find((item) => item.id === modelId);
+        form.setFieldValue("model", modelId);
+        if (!String(form.getFieldValue("displayName") || "").trim()) {
+            form.setFieldValue("displayName", selected?.displayName || modelId);
+        }
+    };
+
+    const submitModel = async (values: { providerId: number; model: string; displayName?: string; capability: ModelCapability; creditCost?: number; pricingRules?: StudioPricingRules; enabled?: boolean }) => {
+        try {
+            const creditCost = Number(values.creditCost || 0);
             const payload = {
                 providerId: values.providerId,
                 model: values.model.trim(),
                 displayName: values.displayName?.trim() || values.model.trim(),
                 capability: values.capability,
-                creditCost: Number(values.creditCost || 0),
-                pricingRules: defaultPricingRules(values.capability, Number(values.creditCost || 0)),
+                creditCost,
+                pricingRules: normalizePricingRules(values.capability, values.pricingRules, creditCost),
                 enabled: values.enabled !== false,
             };
             if (editingModelId) {
@@ -1125,6 +1250,22 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
             message.error(error instanceof Error ? error.message : copy.messages.deleteError);
         } finally {
             setUpdatingModelKeys((current) => current.filter((currentKey) => currentKey !== key));
+        }
+    };
+
+    const testModel = async (item: StudioModel) => {
+        if (!item.rowId) return;
+        const key = modelKeyFor(item);
+        setTestingModelKeys((current) => [...current, key]);
+        try {
+            const result = await testStudioModel(item.rowId);
+            const text = result.message || `HTTP ${result.statusCode || "-"}`;
+            if (result.ok) message.success(text);
+            else message.error(text);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : copy.messages.testError);
+        } finally {
+            setTestingModelKeys((current) => current.filter((currentKey) => currentKey !== key));
         }
     };
 
@@ -1201,25 +1342,86 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
         }
     };
 
+    const logicalModels = useMemo(() => {
+        const grouped = new Map<string, StudioModel[]>();
+        for (const item of models.filter((model) => model.rowId)) {
+            const key = `${item.capability}\u0000${item.displayName || item.model}`;
+            grouped.set(key, [...(grouped.get(key) || []), item]);
+        }
+        return Array.from(grouped.values()).map((items) =>
+            [...items].sort((left, right) => {
+                if (Boolean(left.failoverEnabled) !== Boolean(right.failoverEnabled)) return left.failoverEnabled ? -1 : 1;
+                return Number(left.rowId || 0) - Number(right.rowId || 0);
+            })[0],
+        );
+    }, [models]);
+
+    const patchFailoverDraft = (ownerId: number, patch: Partial<ModelFailoverDraft>) => {
+        setFailoverDrafts((current) => ({
+            ...current,
+            [ownerId]: { ...(current[ownerId] || { enabled: false, routeModelIds: [] }), ...patch },
+        }));
+    };
+
+    const saveFailover = async (owner: StudioModel) => {
+        if (!owner.rowId) return;
+        const draft = failoverDrafts[owner.rowId] || { enabled: false, routeModelIds: [] };
+        if (draft.enabled && draft.routeModelIds.length === 0) {
+            message.warning(locale === "zh" ? "请至少添加一个供应商路由" : "Add at least one provider route");
+            return;
+        }
+        setSavingFailoverIds((current) => [...current, owner.rowId as number]);
+        try {
+            await updateStudioModelFailover(owner.rowId, draft.enabled, draft.routeModelIds);
+            message.success(copy.messages.failoverSaved);
+            await load();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : copy.messages.failoverError);
+        } finally {
+            setSavingFailoverIds((current) => current.filter((id) => id !== owner.rowId));
+        }
+    };
+
     return (
         <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
             <Card title={editingModelId ? copy.editTitle : copy.createTitle} extra={editingModelId ? <Button onClick={resetModelForm}>{copy.cancel}</Button> : null}>
-                <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capability: "image", creditCost: 0, enabled: true }} onFinish={submitModel}>
+                <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capability: "image", creditCost: 0, pricingRules: defaultPricingRules("image", 0), enabled: true }} onFinish={submitModel}>
                     <Form.Item name="providerId" label={copy.provider} rules={[{ required: true }]}>
                         <Select options={providers.map((provider) => ({ label: provider.name, value: provider.id }))} />
                     </Form.Item>
                     <Form.Item name="model" label={copy.modelId} rules={[{ required: true }]}>
                         <Input placeholder="agnes-image-2.1-flash" />
                     </Form.Item>
+                    <div className="-mt-4 mb-6 space-y-2">
+                        <Button icon={<RefreshCw className="size-4" />} block disabled={!selectedProviderId} loading={discoveringModels} onClick={() => void discoverModels()}>
+                            {copy.discoverModels}
+                        </Button>
+                        {discoveredModels.length > 0 ? (
+                            <Select
+                                className="w-full"
+                                showSearch
+                                value={selectedModelId || undefined}
+                                placeholder={copy.discoveredModels}
+                                optionFilterProp="label"
+                                options={discoveredModels.map((item) => ({ value: item.id, label: item.displayName === item.id ? item.id : `${item.displayName} (${item.id})` }))}
+                                onChange={chooseDiscoveredModel}
+                            />
+                        ) : null}
+                        <div className="text-xs text-stone-500">{copy.discoverHint}</div>
+                    </div>
                     <Form.Item name="displayName" label={copy.displayName}>
                         <Input />
                     </Form.Item>
                     <Form.Item name="capability" label={copy.capability}>
-                        <Select options={capabilityOptions.map((option) => ({ ...option, label: locale === "zh" ? { text: "文本", image: "图片", video: "视频", audio: "音频" }[option.value] : option.label }))} />
+                        <Select
+                            options={capabilityOptions.map((option) => ({ ...option, label: locale === "zh" ? { text: "文本", image: "图片", video: "视频", audio: "音频" }[option.value] : option.label }))}
+                            onChange={(capability: ModelCapability) => form.setFieldValue("pricingRules", defaultPricingRules(capability, Number(form.getFieldValue("creditCost") || 0)))}
+                        />
                     </Form.Item>
                     <Form.Item name="creditCost" label={copy.creditCost}>
                         <InputNumber className="w-full" min={0} step={1} />
                     </Form.Item>
+                    <FormPricingRulesEditor form={form} />
                     <Form.Item name="enabled" label={copy.enabled} valuePropName="checked">
                         <Switch />
                     </Form.Item>
@@ -1279,6 +1481,17 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
                             title: copy.columns.actions,
                             render: (_, item) => (
                                 <Space>
+                                    <Popconfirm
+                                        title={locale === "zh" ? "执行真实模型测试？" : "Run a real model test?"}
+                                        description={locale === "zh" ? "文字会发送 hi，图片会生成 1 张测试图，视频会提交 5 秒测试任务。该操作会产生上游成本，但不扣 Studio 用户积分。" : "Text sends hi, image generates one test image, and video submits a 5-second test task. This incurs upstream cost but no Studio user credits."}
+                                        okText={copy.test}
+                                        cancelText={copy.cancel}
+                                        onConfirm={() => void testModel(item)}
+                                    >
+                                        <Button size="small" disabled={!item.rowId} loading={testingModelKeys.includes(modelKeyFor(item))}>
+                                            {copy.test}
+                                        </Button>
+                                    </Popconfirm>
                                     <Button size="small" disabled={!item.rowId} onClick={() => beginModelEdit(item)}>
                                         {copy.edit}
                                     </Button>
@@ -1293,7 +1506,158 @@ function ModelsTab({ locale }: { locale: StudioLocale }) {
                     ]}
                 />
             </Card>
+            <AutomaticFailoverCard
+                locale={locale}
+                copy={copy}
+                providers={providers}
+                models={models}
+                owners={logicalModels}
+                drafts={failoverDrafts}
+                savingIds={savingFailoverIds}
+                onPatch={patchFailoverDraft}
+                onSave={(owner) => void saveFailover(owner)}
+            />
         </div>
+    );
+}
+
+function AutomaticFailoverCard({
+    locale,
+    copy,
+    providers,
+    models,
+    owners,
+    drafts,
+    savingIds,
+    onPatch,
+    onSave,
+}: {
+    locale: StudioLocale;
+    copy: (typeof ADMIN_COPY)[StudioLocale]["models"];
+    providers: StudioProvider[];
+    models: StudioModel[];
+    owners: StudioModel[];
+    drafts: Record<number, ModelFailoverDraft>;
+    savingIds: number[];
+    onPatch: (ownerId: number, patch: Partial<ModelFailoverDraft>) => void;
+    onSave: (owner: StudioModel) => void;
+}) {
+    const [dragging, setDragging] = useState<{ ownerId: number; index: number } | null>(null);
+    const modelById = useMemo(() => new Map(models.filter((item) => item.rowId).map((item) => [item.rowId as number, item])), [models]);
+    const enabledProviderIds = useMemo(() => new Set(providers.filter((provider) => Boolean(provider.enabled)).map((provider) => provider.id)), [providers]);
+    const capabilityName = (capability: ModelCapability) => (locale === "zh" ? { text: "文本", image: "图片", video: "视频", audio: "音频" }[capability] : capability);
+
+    return (
+        <Card className="xl:col-span-2" title={copy.failoverTitle} extra={<Tag color="blue">{owners.length}</Tag>}>
+            <div className="mb-4 text-sm text-stone-500">{copy.failoverSubtitle}</div>
+            <Collapse
+                items={owners.map((owner) => {
+                    const ownerId = owner.rowId as number;
+                    const draft = drafts[ownerId] || { enabled: false, routeModelIds: [] };
+                    const selectedRoutes = draft.routeModelIds.map((id) => modelById.get(id)).filter((item): item is StudioModel => Boolean(item?.rowId));
+                    const selectedProviderIds = new Set(selectedRoutes.map((item) => item.providerId));
+                    const candidates = models.filter(
+                        (item) =>
+                            item.rowId &&
+                            item.enabled &&
+                            enabledProviderIds.has(Number(item.providerId)) &&
+                            item.capability === owner.capability &&
+                            (item.apiFormat || "openai") === (owner.apiFormat || "openai"),
+                    );
+                    const addOptions = candidates
+                        .filter((item) => !selectedProviderIds.has(item.providerId))
+                        .map((item) => ({ value: item.rowId as number, label: `${item.provider} / ${item.model}` }));
+                    return {
+                        key: ownerId,
+                        label: (
+                            <div className="flex min-w-0 items-center gap-2">
+                                <span className="truncate font-medium">{owner.displayName || owner.model}</span>
+                                <Tag>{capabilityName(owner.capability)}</Tag>
+                                <span className="hidden truncate text-xs text-stone-500 sm:inline">{owner.model}</span>
+                                {draft.enabled ? <Tag color="green">{locale === "zh" ? "轮询已启用" : "Enabled"}</Tag> : null}
+                            </div>
+                        ),
+                        children: (
+                            <div className="space-y-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-stone-200 px-3 py-2 dark:border-stone-700">
+                                    <div>
+                                        <div className="text-sm font-medium">{copy.failoverEnabled}</div>
+                                        <div className="text-xs text-stone-500">{copy.dragHint}</div>
+                                    </div>
+                                    <Switch
+                                        checked={draft.enabled}
+                                        onChange={(enabled) => {
+                                            const canUseOwner = candidates.some((item) => item.rowId === ownerId);
+                                            onPatch(ownerId, {
+                                                enabled,
+                                                routeModelIds: enabled && draft.routeModelIds.length === 0 && canUseOwner ? [ownerId] : draft.routeModelIds,
+                                            });
+                                        }}
+                                    />
+                                </div>
+                                <div>
+                                    <div className="mb-2 text-sm font-medium">{copy.routeOrder}</div>
+                                    <div className="space-y-2">
+                                        {selectedRoutes.length === 0 ? <div className="rounded-md border border-dashed border-stone-300 px-3 py-4 text-center text-sm text-stone-500 dark:border-stone-700">{copy.noRoutes}</div> : null}
+                                        {selectedRoutes.map((route, index) => (
+                                            <div
+                                                key={route.rowId}
+                                                draggable
+                                                className="flex items-center gap-2 rounded-md border border-stone-200 bg-white px-2 py-2 dark:border-stone-700 dark:bg-stone-900"
+                                                onDragStart={() => setDragging({ ownerId, index })}
+                                                onDragEnd={() => setDragging(null)}
+                                                onDragOver={(event) => event.preventDefault()}
+                                                onDrop={(event) => {
+                                                    event.preventDefault();
+                                                    if (!dragging || dragging.ownerId !== ownerId || dragging.index === index) return;
+                                                    const nextRouteIds = [...draft.routeModelIds];
+                                                    const [moved] = nextRouteIds.splice(dragging.index, 1);
+                                                    nextRouteIds.splice(index, 0, moved);
+                                                    onPatch(ownerId, { routeModelIds: nextRouteIds });
+                                                    setDragging(null);
+                                                }}
+                                            >
+                                                <button type="button" className="cursor-grab touch-none text-stone-400 active:cursor-grabbing" title={copy.dragHint} aria-label={copy.dragHint}>
+                                                    <GripVertical className="size-4" />
+                                                </button>
+                                                <span className="flex size-6 shrink-0 items-center justify-center rounded bg-stone-100 text-xs font-semibold text-stone-600 dark:bg-stone-800 dark:text-stone-300">{index + 1}</span>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="truncate text-sm font-medium">{route.provider}</div>
+                                                    <div className="truncate text-xs text-stone-500">{route.model}</div>
+                                                </div>
+                                                <Tooltip title={locale === "zh" ? "移除供应商" : "Remove provider"}>
+                                                    <Button
+                                                        type="text"
+                                                        danger
+                                                        icon={<Trash2 className="size-4" />}
+                                                        aria-label={locale === "zh" ? "移除供应商" : "Remove provider"}
+                                                        onClick={() => onPatch(ownerId, { routeModelIds: draft.routeModelIds.filter((id) => id !== route.rowId) })}
+                                                    />
+                                                </Tooltip>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <Select
+                                    className="w-full"
+                                    showSearch
+                                    value={undefined}
+                                    placeholder={copy.selectRoute}
+                                    optionFilterProp="label"
+                                    suffixIcon={<Plus className="size-4" />}
+                                    options={addOptions}
+                                    disabled={addOptions.length === 0}
+                                    onChange={(routeId: number) => onPatch(ownerId, { routeModelIds: [...draft.routeModelIds, routeId] })}
+                                />
+                                <Button type="primary" loading={savingIds.includes(ownerId)} onClick={() => onSave(owner)}>
+                                    {copy.saveFailover}
+                                </Button>
+                            </div>
+                        ),
+                    };
+                })}
+            />
+        </Card>
     );
 }
 
@@ -1304,17 +1668,14 @@ function ModelPricingEditor({ item, rules, disabled, onPatch, onSave }: { item: 
     return (
         <div className="grid gap-4 rounded-xl bg-stone-50 p-4 md:grid-cols-2">
             {item.capability === "image" ? (
-                <>
-                    <PricingGroup title="图片质量积分" hint="用户选择“自动”时按“中”质量扣费。" items={imageQualityItems} entries={rules.image?.quality || {}} disabled={disabled} onPatch={(option, patch) => onPatch(["image", "quality", option], patch)} />
-                    <PricingGroup
-                        title="图片尺寸积分"
-                        hint="用户选择 auto 时按 2K 扣费；最终图片单价 = 质量积分 + 尺寸积分。"
-                        items={imageSizeTierItems}
-                        entries={rules.image?.size || {}}
-                        disabled={disabled}
-                        onPatch={(option, patch) => onPatch(["image", "size", option], patch)}
-                    />
-                </>
+                <PricingGroup
+                    title="图片输出分辨率积分"
+                    hint="每张图片仅按所选 1K、2K 或 4K 分辨率扣费；关闭后用户端保留灰度选项且无法选择。"
+                    items={imageSizeTierItems}
+                    entries={rules.image?.size || {}}
+                    disabled={disabled}
+                    onPatch={(option, patch) => onPatch(["image", "size", option], patch)}
+                />
             ) : (
                 <div className="md:col-span-2">
                     <PricingGroup
@@ -1336,6 +1697,47 @@ function ModelPricingEditor({ item, rules, disabled, onPatch, onSave }: { item: 
     );
 }
 
+function FormPricingRulesEditor({ form }: { form: ReturnType<typeof Form.useForm>[0] }) {
+    const capability = Form.useWatch("capability", form) as ModelCapability | undefined;
+    const creditCost = Number(Form.useWatch("creditCost", form) || 0);
+    const draftRules = Form.useWatch("pricingRules", { form, preserve: true }) as StudioPricingRules | undefined;
+    if (capability !== "image" && capability !== "video") return null;
+
+    const rules = normalizePricingRules(capability, draftRules, creditCost);
+    const patch = (path: ["image" | "video", "size" | "resolution", string], entryPatch: Partial<PricingEntry>) => {
+        const [capabilityKey, group, option] = path;
+        const nextRules = normalizePricingRules(capability, form.getFieldValue("pricingRules"), Number(form.getFieldValue("creditCost") || 0));
+        const capabilityRules = { ...((nextRules[capabilityKey] as Record<string, unknown>) || {}) };
+        const groupRules = { ...((capabilityRules[group] as Record<string, PricingEntry>) || {}) };
+        groupRules[option] = { ...(groupRules[option] || { enabled: true, credits: 0 }), ...entryPatch };
+        form.setFieldValue("pricingRules", { ...nextRules, [capabilityKey]: { ...capabilityRules, [group]: groupRules } });
+    };
+
+    return (
+        <div className="mb-6 space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+            {capability === "image" ? (
+                <PricingGroup
+                    title="图片输出分辨率积分"
+                    hint="每张图片仅按所选 1K、2K 或 4K 分辨率扣费。关闭后的规格会在用户端灰显，无法选择。"
+                    items={imageSizeTierItems}
+                    entries={rules.image?.size || {}}
+                    disabled={false}
+                    onPatch={(option, entryPatch) => patch(["image", "size", option], entryPatch)}
+                />
+            ) : (
+                <PricingGroup
+                    title="视频清晰度每秒积分"
+                    hint="视频最终扣费 = 所选清晰度每秒积分 x 生成秒数。关闭后的清晰度会在用户端灰显，无法选择。"
+                    items={videoResolutionItems}
+                    entries={rules.video?.resolution || {}}
+                    disabled={false}
+                    onPatch={(option, entryPatch) => patch(["video", "resolution", option], entryPatch)}
+                />
+            )}
+        </div>
+    );
+}
+
 function PricingGroup<T extends string>({
     title,
     hint,
@@ -1352,7 +1754,8 @@ function PricingGroup<T extends string>({
     onPatch: (option: T, patch: Partial<PricingEntry>) => void;
 }) {
     return (
-        <Card size="small" title={title}>
+        <section>
+            <div className="mb-1 text-sm font-medium text-stone-800 dark:text-stone-100">{title}</div>
             <div className="mb-3 text-xs text-stone-500">{hint}</div>
             <div className="grid gap-2">
                 {items.map((item) => {
@@ -1366,7 +1769,7 @@ function PricingGroup<T extends string>({
                     );
                 })}
             </div>
-        </Card>
+        </section>
     );
 }
 
@@ -1377,7 +1780,7 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
     const [loading, setLoading] = useState(false);
     const [resolvingReport, setResolvingReport] = useState<string>("");
     const [refundingUsage, setRefundingUsage] = useState<string>("");
-    const [filters, setFilters] = useState({ source: "", user: "", model: "", capability: "", range: [undefined, undefined] as [number | undefined, number | undefined] });
+    const [filters, setFilters] = useState({ source: "", user: "", provider: "", model: "", capability: "", range: [undefined, undefined] as [number | undefined, number | undefined] });
 
     const load = async (nextFilters = filters) => {
         setLoading(true);
@@ -1386,6 +1789,7 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
                 await fetchStudioUsage({
                     source: nextFilters.source || undefined,
                     user: nextFilters.user || undefined,
+                    provider: nextFilters.provider || undefined,
                     model: nextFilters.model || undefined,
                     capability: nextFilters.capability || undefined,
                     from: nextFilters.range[0],
@@ -1405,8 +1809,9 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
     }, []);
 
     const modelOptions = useMemo(() => Array.from(new Set(usage.map((item) => item.model))).map((value) => ({ value, label: value })), [usage]);
+    const providerOptions = useMemo(() => Array.from(new Set(usage.map((item) => item.provider_name).filter(Boolean))).map((value) => ({ value, label: value })), [usage]);
     const reset = () => {
-        const next = { source: "", user: "", model: "", capability: "", range: [undefined, undefined] as [undefined, undefined] };
+        const next = { source: "", user: "", provider: "", model: "", capability: "", range: [undefined, undefined] as [undefined, undefined] };
         setFilters(next);
         void load(next);
     };
@@ -1444,7 +1849,7 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
                 </Space>
             }
         >
-            <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[130px_1fr_1.2fr_1fr_1.5fr_auto]">
+            <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[130px_1fr_1fr_1.2fr_1fr_1.5fr_auto]">
                 <Select
                     allowClear
                     placeholder={locale === "zh" ? "来源" : "Source"}
@@ -1457,6 +1862,15 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
                     onChange={(source) => setFilters((current) => ({ ...current, source: source || "" }))}
                 />
                 <Input allowClear placeholder={locale === "zh" ? "用户名或邮箱" : "User or email"} value={filters.user} onChange={(event) => setFilters((current) => ({ ...current, user: event.target.value }))} onPressEnter={() => void load()} />
+                <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder={copy.columns.provider}
+                    value={filters.provider || undefined}
+                    options={providerOptions}
+                    onChange={(provider) => setFilters((current) => ({ ...current, provider: provider || "" }))}
+                />
                 <Select
                     allowClear
                     showSearch
@@ -1492,25 +1906,26 @@ function UsageTab({ locale }: { locale: StudioLocale }) {
                 dataSource={usage}
                 size="middle"
                 pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => (locale === "zh" ? `共 ${total} 条` : `${total} records`) }}
-                scroll={{ x: 1160 }}
+                scroll={{ x: 1280 }}
                 columns={[
                     { title: copy.columns.time, dataIndex: "created_at", width: 164, render: (value: number) => new Date(value * 1000).toLocaleString(locale === "zh" ? "zh-CN" : "en-US") },
                     { title: copy.columns.source, dataIndex: "source", width: 86 },
                     { title: copy.columns.user, width: 140, ellipsis: true, render: (_, item) => item.username || item.email || item.user_id },
+                    { title: copy.columns.provider, dataIndex: "provider_name", width: 130, ellipsis: true, render: (value: string) => value || "-" },
                     { title: copy.columns.model, dataIndex: "model", width: 166, ellipsis: true },
                     { title: copy.columns.capability, dataIndex: "capability", width: 82, render: (value: string) => <Tag>{value}</Tag> },
                     { title: copy.columns.quantity, width: 104, render: (_, item) => formatUsageQuantity(item, locale) },
                     { title: copy.columns.credits, dataIndex: "credits", width: 90, render: (value: number) => formatNumber(value) },
                     { title: copy.columns.elapsed, dataIndex: "elapsed_ms", width: 82, render: (value: number) => formatElapsed(value) },
                     { title: copy.columns.balanceDelta, dataIndex: "balance_delta", width: 106, render: (value: number) => formatNumber(value) },
-                    { title: copy.columns.status, dataIndex: "status", width: 106, render: (value: string) => <Tag color={value === "success" ? "green" : value.includes("refund") ? "orange" : "blue"}>{value}</Tag> },
+                    { title: copy.columns.status, dataIndex: "status", width: 106, render: (value: string) => <Tag color={value === "success" ? "green" : value.includes("refund") ? "orange" : "blue"}>{adminUsageStatusLabel(value, locale)}</Tag> },
                     {
                         title: copy.columns.error,
                         width: 360,
                         ellipsis: { showTitle: false },
                         render: (_, item) => {
                             const detail = [item.error, item.report_note ? `${locale === "zh" ? "用户备注" : "User note"}: ${item.report_note}` : ""].filter(Boolean).join("\n");
-                            const canRefund = item.report_status === "open" && ["massmore", "mtline"].includes(item.source) && Number(item.credits || 0) > 0 && item.admin_refund_status !== "processing" && item.admin_refund_status !== "completed";
+                            const canRefund = item.report_status === "open" && !["processing", "charged", "pending", "queued", "running"].includes(item.status) && ["massmore", "mtline"].includes(item.source) && Number(item.credits || 0) > 0 && item.admin_refund_status !== "processing" && item.admin_refund_status !== "completed";
                             return detail || item.report_status ? (
                                 <div className="flex min-w-0 items-center gap-1">
                                     <Tooltip title={detail || undefined}>
@@ -1562,6 +1977,19 @@ function formatUsageQuantity(item: StudioUsage, locale: StudioLocale) {
     const base = `${unitCount} ${unit}`;
     if (!successCount && !failedCount) return base;
     return `${base} / ${locale === "zh" ? "成功" : "ok"} ${successCount}, ${locale === "zh" ? "失败" : "failed"} ${failedCount}`;
+}
+
+function adminUsageStatusLabel(status: string, locale: StudioLocale) {
+    const labels: Record<string, [string, string]> = {
+        success: ["成功", "Success"],
+        processing: ["处理中", "Processing"],
+        charged: ["处理中", "Processing"],
+        refunded: ["已退款", "Refunded"],
+        refund_failed: ["退款异常", "Refund failed"],
+        admin_refunded: ["管理员已返还", "Admin refunded"],
+    };
+    const label = labels[status];
+    return label ? label[locale === "zh" ? 0 : 1] : status;
 }
 
 function formatElapsed(value?: number) {

@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { Button, Modal, Segmented, Slider } from "antd";
 import { RotateCcw, WandSparkles } from "lucide-react";
 
+import { ModelPicker } from "@/components/model-picker";
+import { CreditSymbol, requestCreditCost } from "@/constant/credits";
+import type { AiConfig } from "@/stores/use-config-store";
+
 export type CanvasImageAngleParams = {
     horizontalAngle: number;
     pitchAngle: number;
@@ -16,12 +20,17 @@ const defaultParams: CanvasImageAngleParams = {
     wideAngle: false,
 };
 
-export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (params: CanvasImageAngleParams) => void }) {
+export function CanvasNodeAngleDialog({ dataUrl, open, config, onClose, onConfirm }: { dataUrl: string; open: boolean; config: AiConfig; onClose: () => void; onConfirm: (params: CanvasImageAngleParams, model: string) => void }) {
     const [params, setParams] = useState(defaultParams);
+    const [model, setModel] = useState("");
+    const selectedModel = model || config.imageModel || "";
+    const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts: config.modelCosts, modelPricingRules: config.modelPricingRules, model: selectedModel, capability: "image", count: 1, quality: config.quality, size: config.size, imageResolution: config.imageResolution });
 
     useEffect(() => {
-        if (open) setParams(defaultParams);
-    }, [dataUrl, open]);
+        if (!open) return;
+        setParams(defaultParams);
+        setModel(config.imageModel || "");
+    }, [config.imageModel, dataUrl, open]);
 
     const update = <Key extends keyof CanvasImageAngleParams>(key: Key, value: CanvasImageAngleParams[Key]) => setParams((current) => ({ ...current, [key]: value }));
 
@@ -45,6 +54,10 @@ export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { d
                         </Button>
                     </div>
                     <div className="space-y-6 py-2">
+                        <div className="space-y-2">
+                            <span className="font-medium opacity-75">生成模型</span>
+                            <ModelPicker config={config} value={selectedModel} onChange={setModel} capability="image" className="h-10 w-full max-w-full" fullWidth />
+                        </div>
                         <AngleSlider label="左右角度" value={params.horizontalAngle} min={-60} max={60} step={1} suffix="deg" onChange={(value) => update("horizontalAngle", value)} />
                         <AngleSlider label="俯仰角度" value={params.pitchAngle} min={-45} max={45} step={1} suffix="deg" onChange={(value) => update("pitchAngle", value)} />
                         <AngleSlider label="镜头距离" value={params.cameraDistance} min={1} max={10} step={0.1} onChange={(value) => update("cameraDistance", value)} />
@@ -62,9 +75,10 @@ export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { d
                         </div>
                     </div>
                 </div>
-                <div className="flex justify-end">
-                    <Button type="primary" size="large" icon={<WandSparkles className="size-4" />} onClick={() => onConfirm(params)}>
-                        AI 生成
+                <div className="flex items-center justify-between gap-4">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-semibold tabular-nums"><CreditSymbol /> {credits.toFixed(2)} 积分</span>
+                    <Button type="primary" size="large" icon={<WandSparkles className="size-4" />} disabled={!selectedModel} onClick={() => onConfirm(params, selectedModel)}>
+                        AI 生成（{credits.toFixed(2)} 积分）
                     </Button>
                 </div>
             </div>

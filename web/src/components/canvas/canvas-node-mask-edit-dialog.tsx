@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { Button, Input, Modal, Slider } from "antd";
 import { Brush, Eraser, RotateCcw, WandSparkles, X } from "lucide-react";
 
+import { ModelPicker } from "@/components/model-picker";
+import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { readImageMeta } from "@/lib/image-utils";
+import type { AiConfig } from "@/stores/use-config-store";
 
 export type CanvasImageMaskEditPayload = {
     prompt: string;
@@ -15,7 +18,7 @@ const defaultBrushSize = 100;
 const maskFillColor = "rgba(37, 99, 235, .38)";
 const maskBorderColor = "rgba(255, 255, 255, .72)";
 
-export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (payload: CanvasImageMaskEditPayload) => void }) {
+export function CanvasNodeMaskEditDialog({ dataUrl, open, config, onClose, onConfirm }: { dataUrl: string; open: boolean; config: AiConfig; onClose: () => void; onConfirm: (payload: CanvasImageMaskEditPayload, model: string) => void }) {
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const previewCanvasRef = useRef<HTMLCanvasElement>(null);
     const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
@@ -24,6 +27,9 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
     const [brushSize, setBrushSize] = useState(defaultBrushSize);
     const [mode, setMode] = useState<DrawMode>("paint");
     const [error, setError] = useState("");
+    const [model, setModel] = useState("");
+    const selectedModel = model || config.imageModel || "";
+    const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts: config.modelCosts, modelPricingRules: config.modelPricingRules, model: selectedModel, capability: "image", count: 1, quality: config.quality, size: config.size, imageResolution: config.imageResolution });
 
     useEffect(() => {
         if (!open) return;
@@ -31,8 +37,9 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
         setBrushSize(defaultBrushSize);
         setMode("paint");
         setError("");
+        setModel(config.imageModel || "");
         void readImageMeta(dataUrl).then(setImage);
-    }, [dataUrl, open]);
+    }, [config.imageModel, dataUrl, open]);
 
     useEffect(() => {
         clearCanvas(maskCanvasRef.current);
@@ -95,7 +102,8 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
         if (!nextPrompt) return setError("请输入修改要求");
         if (!canvas) return;
         if (!canvasHasPaint(canvas)) return setError("请先涂抹局部区域");
-        onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas) });
+        if (!selectedModel) return setError("请选择图片模型");
+        onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas) }, selectedModel);
     };
 
     return (
@@ -160,6 +168,11 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
                         {error ? <div className="text-xs font-medium text-[#ef4444]">{error}</div> : null}
                     </div>
 
+                    <div className="space-y-2">
+                        <div className="text-sm font-medium opacity-75">生成模型</div>
+                        <ModelPicker config={config} value={selectedModel} onChange={setModel} capability="image" className="h-10 w-full max-w-full" fullWidth />
+                    </div>
+
                     <div className="mt-auto flex items-center justify-between gap-2">
                         <Button icon={<RotateCcw className="size-4" />} onClick={resetMask}>
                             重置
@@ -168,8 +181,8 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
                             <Button icon={<X className="size-4" />} onClick={onClose}>
                                 取消
                             </Button>
-                            <Button type="primary" icon={<WandSparkles className="size-4" />} onClick={submit}>
-                                AI 修改
+                            <Button type="primary" disabled={!selectedModel} icon={<WandSparkles className="size-4" />} onClick={submit}>
+                                <span className="inline-flex items-center gap-1"><CreditSymbol /> AI 修改 {credits.toFixed(2)}</span>
                             </Button>
                         </div>
                     </div>

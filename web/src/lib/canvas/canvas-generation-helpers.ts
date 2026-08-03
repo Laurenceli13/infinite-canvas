@@ -1,4 +1,4 @@
-import { defaultConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, modelMatchesCapability, type AiConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
@@ -91,11 +91,20 @@ export function getInputSummary(inputs: NodeGenerationInput[]) {
 
 export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
     const defaultModel = mode === "image" ? config.imageModel : mode === "video" ? config.videoModel : mode === "audio" ? config.audioModel : config.textModel;
+    const fallbackModel = mode === "image" ? defaultConfig.imageModel : mode === "video" ? defaultConfig.videoModel : mode === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
+    const nodeModel = node?.metadata?.model;
+    const model = nodeModel && modelMatchesCapability(config, nodeModel, mode)
+        ? nodeModel
+        : defaultModel && modelMatchesCapability(config, defaultModel, mode)
+            ? defaultModel
+            : fallbackModel;
     return {
         ...config,
-        model: node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
+        model,
+        ...(mode === "video" ? { videoModel: model } : {}),
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
         size: node?.metadata?.size || config.size || defaultConfig.size,
+        imageResolution: node?.metadata?.imageResolution || config.imageResolution || defaultConfig.imageResolution,
         background: node?.metadata?.background ?? config.background ?? defaultConfig.background,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
@@ -111,7 +120,7 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
 
 export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
     return nodes.map((node) =>
-        node.metadata?.status === "loading" && !node.metadata.asyncJobId
+        node.metadata?.status === "loading" && !node.metadata.asyncJobId && !node.metadata.videoTaskId
             ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } }
             : node,
     );
