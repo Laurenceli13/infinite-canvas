@@ -17,6 +17,16 @@ const defaultSchedule: PromptSourceSchedule = {
 
 export const PROMPT_SOURCE_INTERVALS = [0, 30, 60, 360, 1440];
 
+// Studio's existing configuration panel uses labeled options; keep this
+// compatibility export while the upstream store uses the numeric list above.
+export const PROMPT_SOURCE_INTERVAL_OPTIONS = [
+    { label: "关闭定时", value: 0 },
+    { label: "每 30 分钟", value: 30 },
+    { label: "每 1 小时", value: 60 },
+    { label: "每 6 小时", value: 360 },
+    { label: "每 24 小时", value: 1440 },
+];
+
 type PromptSourceStore = {
     sources: PromptSource[];
     schedule: PromptSourceSchedule;
