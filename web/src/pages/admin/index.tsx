@@ -1035,7 +1035,7 @@ function ProvidersTab({ locale }: { locale: StudioLocale }) {
                                             label={copy.extraHeaders}
                                             rules={[
                                                 {
-                                                    validator: async (_, value: string | undefined) => {
+                                                    validator: async (_rule: unknown, value: string | undefined) => {
                                                         if (!value?.trim()) {
                                                             return;
                                                         }

@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Image as ImageIcon, LoaderCircle, MessageSquare, Music2, Play, Settings2, Square, Video } from "lucide-react";
 import { Button, Segmented } from "antd";
 
@@ -128,7 +128,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                 className="mt-auto !h-9 !w-full !cursor-pointer !rounded-lg"
                 danger={isRunning}
                 disabled={!isRunning && !canGenerate}
-                onMouseDown={(event) => event.stopPropagation()}
+                onMouseDown={(event: ReactMouseEvent<HTMLButtonElement>) => event.stopPropagation()}
                 onClick={() => (isRunning ? onStop(node.id) : onGenerate(node.id))}
             >
                 <span className="inline-flex items-center gap-1.5">

@@ -298,7 +298,7 @@ export default function AssetsPage() {
             message.warning(copy.noAssetsToExport);
             return;
         }
-        await exportAssets(validAssets);
+        await exportAssets(validAssets, "assets.zip");
     };
 
     const importAssetZip = async (file?: File) => {

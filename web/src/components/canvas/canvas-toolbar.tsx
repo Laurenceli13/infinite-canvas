@@ -339,7 +339,7 @@ function ToolbarButton({
             disabled={disabled}
             style={active ? activeStyle : hovered === id && !disabled ? hoverStyle : { color: danger ? "#f87171" : theme.toolbar.item, opacity: disabled ? 0.35 : 1 }}
             icon={children}
-            onMouseEnter={(event) => {
+            onMouseEnter={(event: ReactMouseEvent<HTMLElement>) => {
                 onHover(id);
                 onTipX(getTipX(wrapRef.current, event.currentTarget));
             }}
