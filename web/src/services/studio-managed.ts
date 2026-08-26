@@ -25,6 +25,7 @@ export type StudioModel = {
     pricingRules?: StudioPricingRules;
     provider: string;
     apiFormat?: ApiCallFormat;
+    protocolTemplate?: StudioProviderProtocolTemplate;
     enabled: boolean;
     rowId?: number;
     providerId?: number;
@@ -358,7 +359,7 @@ export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): 
         name: provider,
         baseUrl: typeof window !== "undefined" ? window.location.origin : "https://studio.massmore.org",
         apiKey: "studio-managed",
-        apiFormat: items[0]?.apiFormat || "openai",
+        apiFormat: items[0]?.protocolTemplate === "grok2api" ? "grok" : items[0]?.apiFormat || "openai",
         models: Array.from(new Map(items.map((item) => [item.model, { name: item.model, displayName: item.displayName, capability: item.capability }])).values()),
     }));
     const all = uniqueOptions(models.map((model) => encodeChannelModel(channelIdForProvider(channels, model.provider), model.model)).filter(Boolean));

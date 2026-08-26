@@ -520,6 +520,50 @@ function isAgnesFormat(config: Pick<AiConfig, "apiFormat">) {
     return config.apiFormat === "agnes";
 }
 
+function isGrokImageModel(model: string) {
+    return model.trim().toLowerCase().startsWith("grok-imagine-image");
+}
+
+function isGrok2APIImageConfig(config: Pick<AiConfig, "apiFormat" | "model">) {
+    return config.apiFormat === "grok" && isGrokImageModel(config.model);
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+    let a = Math.abs(left);
+    let b = Math.abs(right);
+    while (b) {
+        const remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    return a || 1;
+}
+
+function grokAspectRatio(config: AiConfig) {
+    const size = config.size.trim().toLowerCase();
+    if (!size || size === "auto") return undefined;
+    const dimensions = parseImageDimensions(size);
+    if (!dimensions) return size.includes(":") ? size : undefined;
+    const divisor = greatestCommonDivisor(dimensions.width, dimensions.height);
+    return `${dimensions.width / divisor}:${dimensions.height / divisor}`;
+}
+
+function grokResolution(config: AiConfig) {
+    const selected = selectedImageResolution(config);
+    return selected === "4k" ? "4k" : selected === "2k" ? "2k" : "1k";
+}
+
+async function createGrokImageEditBody(config: AiConfig, prompt: string, references: ReferenceImage[], n: number) {
+    return {
+        model: config.model,
+        prompt: withSystemPrompt(config, prompt),
+        images: await Promise.all(references.map(async (image) => ({ url: await imageToDataUrl(image) }))),
+        ...(n > 1 ? { n } : {}),
+        ...(grokAspectRatio(config) ? { aspect_ratio: grokAspectRatio(config) } : {}),
+        resolution: grokResolution(config),
+    };
+}
+
 function geminiBaseUrl(config: Pick<AiConfig, "baseUrl">) {
     const normalizedBaseUrl = config.baseUrl.trim().replace(/\/+$/, "");
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
@@ -1052,6 +1096,28 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(enrichModelError(requestConfig, readAxiosError(error, "??????"), "image"));
         }
     }
+    if (isGrok2APIImageConfig(requestConfig)) {
+        const requestBody: Record<string, unknown> = {
+            model: requestConfig.model,
+            prompt: withSystemPrompt(requestConfig, prompt),
+            n,
+            ...(grokAspectRatio(requestConfig) ? { aspect_ratio: grokAspectRatio(requestConfig) } : {}),
+            resolution: grokResolution(requestConfig),
+        };
+        try {
+            if (usesStudioAsyncImages(requestConfig)) {
+                const asyncImages = await createStudioAsyncImageJob(requestBody, "generations", options);
+                if (asyncImages) return asyncImages;
+            }
+            const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), requestBody, {
+                headers: requestHeaders(requestConfig, options, "application/json"),
+                signal: options?.signal,
+            });
+            return parseImagePayload(response.data);
+        } catch (error) {
+            throw new Error(enrichModelError(requestConfig, readAxiosError(error, "图片生成失败"), "image"));
+        }
+    }
     const quality = normalizeQuality(requestConfig.quality);
     const requestSize = resolveRequestSize(requestConfig);
     const requestBody: Record<string, unknown> = {
@@ -1120,6 +1186,23 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             return parseImagePayload(response.data);
         } catch (error) {
             throw new Error(enrichModelError(requestConfig, readAxiosError(error, "Request failed"), "image"));
+        }
+    }
+    if (isGrok2APIImageConfig(requestConfig)) {
+        if (mask) throw new Error("Grok2API image edit does not support masks");
+        const requestBody = await createGrokImageEditBody(requestConfig, requestPrompt, references, n);
+        try {
+            if (usesStudioAsyncImages(requestConfig)) {
+                const asyncImages = await createStudioAsyncImageJob(requestBody, "edits", options);
+                if (asyncImages) return asyncImages;
+            }
+            const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), requestBody, {
+                headers: requestHeaders(requestConfig, options, "application/json"),
+                signal: options?.signal,
+            });
+            return parseImagePayload(response.data);
+        } catch (error) {
+            throw new Error(enrichModelError(requestConfig, readAxiosError(error, "图片生成失败"), "image"));
         }
     }
     const quality = normalizeQuality(requestConfig.quality);

@@ -1,7 +1,7 @@
 import type { StudioProviderPayload } from "@/services/studio-managed";
 import type { ApiCallFormat } from "@/stores/use-config-store";
 
-export type StudioProviderProtocolTemplate = "openai" | "gemini" | "agnes" | "openai_async" | "generic_async";
+export type StudioProviderProtocolTemplate = "openai" | "gemini" | "agnes" | "grok2api" | "openai_async" | "generic_async";
 
 export type StudioProviderAdvancedConfig = Pick<
     StudioProviderPayload,
@@ -44,6 +44,7 @@ const baseAdvancedConfig: StudioProviderAdvancedConfig = {
 
 export function recommendedProtocolTemplate(apiFormat: ApiCallFormat): StudioProviderProtocolTemplate {
     if (apiFormat === "agnes") return "agnes";
+    if (apiFormat === "grok") return "grok2api";
     if (["gemini", "imagen", "veo", "omni"].includes(apiFormat)) return "gemini";
     if (apiFormat === "sora") return "openai_async";
     if (["seedance", "minimax", "midjourney", "kling", "happyhors"].includes(apiFormat)) return "generic_async";
@@ -136,6 +137,14 @@ export function createDefaultStudioProviderAdvancedConfig(apiFormat: ApiCallForm
         };
     }
     if (protocolTemplate === "agnes") {
+        return {
+            ...baseAdvancedConfig,
+            protocolTemplate,
+            createPath: "/images/generations",
+            resultUrlField: "data.0.url",
+        };
+    }
+    if (protocolTemplate === "grok2api") {
         return {
             ...baseAdvancedConfig,
             protocolTemplate,

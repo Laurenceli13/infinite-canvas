@@ -208,6 +208,7 @@ const ADMIN_COPY: Record<
                 openai: "OpenAI 兼容",
                 gemini: "Gemini 兼容",
                 agnes: "AGNES Skill",
+                grok2api: "Grok2API 图像/视频",
                 openai_async: "OpenAI 异步视频",
                 generic_async: "通用异步任务",
             },
@@ -325,6 +326,7 @@ const ADMIN_COPY: Record<
                 openai: "OpenAI Compatible",
                 gemini: "Gemini Compatible",
                 agnes: "AGNES Skill",
+                grok2api: "Grok2API Image/Video",
                 openai_async: "OpenAI Async Video",
                 generic_async: "Generic Async Task",
             },
@@ -980,6 +982,7 @@ function ProvidersTab({ locale }: { locale: StudioLocale }) {
                                                     { label: copy.protocolOptions.openai, value: "openai" },
                                                     { label: copy.protocolOptions.gemini, value: "gemini" },
                                                     { label: copy.protocolOptions.agnes, value: "agnes" },
+                                                    { label: copy.protocolOptions.grok2api, value: "grok2api" },
                                                     { label: copy.protocolOptions.openai_async, value: "openai_async" },
                                                     { label: copy.protocolOptions.generic_async, value: "generic_async" },
                                                 ]}
