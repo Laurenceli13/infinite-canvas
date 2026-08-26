@@ -74,7 +74,7 @@ export type CanvasNodeMetadata = {
     asyncJobQueuePosition?: number;
     asyncResultReady?: boolean;
     videoTaskId?: string;
-    videoTaskProvider?: "openai" | "seedance" | "agnes";
+    videoTaskProvider?: "openai" | "seedance" | "agnes" | "grok";
     videoTaskStatus?: "pending" | "failed";
 };
 
