@@ -207,7 +207,10 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
     const id = task.id || task.task_id || task.video_id;
     if (!id) return;
     if (isStudioManagedHost()) {
-        await axios.post(studioApi("/generation/cancel"), { requestId: id });
+        // The managed backend can cancel a request before it is submitted, but
+        // a returned provider task ID is not a portable cancellation handle.
+        // Do not claim an upstream job was cancelled when it was only removed
+        // from the workbench history.
         return;
     }
     const payload = (await axios.delete<ApiVideoEnvelope>(`/api/v1/video-tasks/${encodeURIComponent(id)}`, { headers: aiHeaders(config) })).data;
