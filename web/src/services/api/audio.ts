@@ -8,6 +8,7 @@ import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfi
 import { geminiPcmBase64ToWav, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { isStudioManagedHost, studioApi } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceAudio } from "@/types/media";
 
@@ -35,11 +36,13 @@ type GeminiAudioResponse = { candidates?: Array<{ content?: { parts?: Array<{ in
 const grokTtsVoiceRequests = new Map<string, Promise<GrokTtsVoice[]>>();
 
 function usesAccountProxy(config: AiConfig) {
+    if (isStudioManagedHost()) return true;
     const token = useUserStore.getState().token;
     return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
+    if (isStudioManagedHost()) return studioApi(`/v1${path}`);
     if (usesAccountProxy(config)) return `/api/v1${path}`;
     const channel = localChannelForActiveModel(config);
     return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
@@ -96,7 +99,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, r
             const body = usesAccountProxy(config) ? { model, ...nativeBody } : nativeBody;
             const channel = localChannelForActiveModel(config);
             const response = await axios.post<GeminiAudioResponse>(
-                usesAccountProxy(config) ? "/api/v1/audio/speech" : geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "generateContent"),
+                usesAccountProxy(config) ? aiApiUrl(config, "/audio/speech") : geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "generateContent"),
                 body,
                 { headers: usesAccountProxy(config) ? aiHeaders(config) : geminiDirectHeaders(config) },
             );
@@ -130,7 +133,7 @@ export async function createCanvasAudioTask(config: AiConfig, prompt: string, op
     const model = (config.model || config.audioModel).trim();
     assertAudioConfig(config, model);
 
-    if (!usesAccountProxy(config) || isGeminiTtsModel(model) && isGeminiConfig(config, model)) {
+    if (isStudioManagedHost() || !usesAccountProxy(config) || isGeminiTtsModel(model) && isGeminiConfig(config, model)) {
         const blob = await requestAudioGeneration(config, prompt, referenceAudio);
         const format = audioResponseFormat(config, model);
         const stored = await storeGeneratedAudio(blob, format);

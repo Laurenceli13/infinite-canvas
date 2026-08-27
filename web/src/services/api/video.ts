@@ -10,6 +10,7 @@ import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3D
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
+import { isStudioManagedHost, studioApi } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -34,11 +35,13 @@ export class VideoRequestError extends Error {
 }
 
 function usesAccountProxy(config: AiConfig) {
+    if (isStudioManagedHost()) return true;
     const token = useUserStore.getState().token;
     return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
+    if (isStudioManagedHost()) return studioApi(`/v1${path}`);
     if (usesAccountProxy(config)) return `/api/v1${path}`;
     const channel = localChannelForActiveModel(config);
     return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
@@ -56,6 +59,9 @@ function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
         return aiApiUrl(config, `/async-result/${encodeURIComponent(id)}`);
     }
     if (!isAgnesVideoModel(model) || !id.startsWith("video_")) {
+        return aiApiUrl(config, `/videos/${encodeURIComponent(id)}`);
+    }
+    if (isStudioManagedHost()) {
         return aiApiUrl(config, `/videos/${encodeURIComponent(id)}`);
     }
     if (usesAccountProxy(config)) {
@@ -188,6 +194,9 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
 
 export async function listVideoGenerationTasks(config: AiConfig) {
     if (!usesAccountProxy(config)) return [];
+    // Studio records upstream video tasks for polling, while the workbench keeps
+    // its own local history. Do not query the retired Go task-list endpoint.
+    if (isStudioManagedHost()) return [];
     const payload = (await axios.get<ApiVideoEnvelope>("/api/v1/video-tasks", { headers: aiHeaders(config) })).data;
     if (payload.code !== 0) throw new VideoRequestError(payload.msg || payload.message || "读取视频任务失败", payload);
     return Array.isArray(payload.data) ? payload.data.map(normalizeVideoResponse) : [];
@@ -197,6 +206,10 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
     if (!usesAccountProxy(config) || !task) return;
     const id = task.id || task.task_id || task.video_id;
     if (!id) return;
+    if (isStudioManagedHost()) {
+        await axios.post(studioApi("/generation/cancel"), { requestId: id });
+        return;
+    }
     const payload = (await axios.delete<ApiVideoEnvelope>(`/api/v1/video-tasks/${encodeURIComponent(id)}`, { headers: aiHeaders(config) })).data;
     if (payload.code !== 0) throw new VideoRequestError(payload.msg || payload.message || "删除视频任务失败", payload);
 }
