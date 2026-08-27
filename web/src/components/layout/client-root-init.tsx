@@ -72,12 +72,14 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [hydrateUser, isLoginPage]);
 
     useEffect(() => {
+        if (isStudioManagedHost()) return;
         if (!token || user?.role !== "admin" || adminRemoteTokenRef.current === token) return;
         adminRemoteTokenRef.current = token;
         if (channelMode !== "remote") updateConfig("channelMode", "remote");
     }, [channelMode, token, updateConfig, user?.role]);
 
     useEffect(() => {
+        if (isStudioManagedHost()) return;
         if (!token || !user?.id) return;
         void fetchUserConfig(token)
             .then((payload) => {

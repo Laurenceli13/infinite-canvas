@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import { listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
 import { fetchUserConfig } from "@/services/api/user-config";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
@@ -74,6 +75,7 @@ function waitForUserStoreHydration() {
 }
 
 function queueProjectSave(project: CanvasProject) {
+    if (isStudioManagedHost()) return;
     const token = useUserStore.getState().token;
     const syncEnabled = accountCanvasSyncEnabled;
     const previous = projectSaveTimers.get(project.id);
@@ -159,7 +161,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         const localHasData =
             Array.isArray(localProjects) && localProjects.length > 0;
 
-        if (token) {
+        if (token && !isStudioManagedHost()) {
             try {
                 const [userConfig, remoteProjects] = await Promise.all([
                     fetchUserConfig(token),
@@ -338,6 +340,10 @@ export const useCanvasStore = create<CanvasStore>()(
                 queueProjectSave(nextProject);
             },
             syncWithRemote: async (token, syncEnabled) => {
+                if (isStudioManagedHost()) {
+                    accountCanvasSyncEnabled = false;
+                    return;
+                }
                 accountCanvasSyncEnabled = syncEnabled;
                 if (!syncEnabled) return;
                 const localProjects = get().projects;
