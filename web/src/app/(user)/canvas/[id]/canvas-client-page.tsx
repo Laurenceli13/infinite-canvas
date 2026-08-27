@@ -577,7 +577,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         pollingVideoNodeIdsRef.current.delete(node.id);
                     });
             });
-            const imageTargets = nodesRef.current.filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.imageTaskId);
+            // A managed job can expose a preview URL before its final response is durable.
+            // Keep polling nodes with preview content until the job reaches a terminal state.
+            const imageTargets = nodesRef.current.filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && node.metadata.imageTaskId);
             imageTargets.forEach((node) => {
                 if (pollingImageNodeIdsRef.current.has(node.id) || !node.metadata?.imageTaskId) return;
                 pollingImageNodeIdsRef.current.add(node.id);
@@ -4812,7 +4814,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
         if (node.id !== nodeId) return node;
         const progress = typeof task.progress === "number" ? Math.max(0, Math.min(100, task.progress)) : node.metadata?.progress || 0;
         const url = urls[0] || "";
-        const completed = canvasTaskCompleted(task.status) || Boolean(url);
+        const completed = canvasTaskCompleted(task.status);
         const failed = canvasTaskFailed(task.status) || (completed && !url);
         const taskStartedAt = parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || startedAt;
         const metadata: CanvasNodeMetadata = {
@@ -4824,7 +4826,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             progress,
             imageTaskId: task.id || node.metadata?.imageTaskId,
         };
-        if (!completed || !url) return { ...node, metadata };
+        if (!url) return { ...node, metadata };
         const isPanorama = isPanoramaNodeType(node.type);
         const requestedSize = nodeSizeFromRatio(node.metadata?.size || "", fallbackSize.width, fallbackSize.height);
         const naturalWidth = task.width || requestedSize?.width || fallbackSize.width || node.width;
@@ -4839,13 +4841,16 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 ...metadata,
                 content: url,
                 storageKey: task.storageKey || "",
-                status: NODE_STATUS_SUCCESS,
+                // A preview must be visible immediately, but it is not the final result.
+                // Leaving this as loading keeps the durable backend job under observation.
+                status: completed ? NODE_STATUS_SUCCESS : NODE_STATUS_LOADING,
                 naturalWidth,
                 naturalHeight,
                 bytes: task.bytes || 0,
                 mimeType: task.mimeType || "image/png",
-                progress: 100,
-                imageTaskResultId: task.id,
+                progress: completed ? 100 : progress,
+                imageTaskId: completed ? undefined : task.id || node.metadata?.imageTaskId,
+                imageTaskResultId: completed ? task.id : node.metadata?.imageTaskResultId,
                 panoramaProjection: isPanorama ? ("equirectangular" as const) : undefined,
             },
         };

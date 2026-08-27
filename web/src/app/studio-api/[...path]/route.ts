@@ -1,0 +1,58 @@
+import type { NextRequest } from "next/server";
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+type RouteContext = { params: Promise<{ path: string[] }> };
+
+function forwardedHeaders(request: NextRequest) {
+    const headers = new Headers(request.headers);
+    headers.delete("host");
+    headers.delete("content-length");
+    headers.delete("connection");
+    return headers;
+}
+
+function responseHeaders(response: Response) {
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    headers.delete("transfer-encoding");
+    return headers;
+}
+
+async function proxy(request: NextRequest, context: RouteContext) {
+    const { path } = await context.params;
+    const baseUrl = process.env.STUDIO_API_BASE_URL || "http://127.0.0.1:18180";
+    const target = `${baseUrl.replace(/\/$/, "")}/studio-api/${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`;
+    const hasBody = request.method !== "GET" && request.method !== "HEAD";
+
+    try {
+        const response = await fetch(target, {
+            method: request.method,
+            headers: forwardedHeaders(request),
+            body: hasBody ? request.body : undefined,
+            duplex: hasBody ? "half" : undefined,
+            // Follow the backend's signed R2 result redirect on the server. The browser
+            // receives a same-origin response and never needs cross-origin R2 CORS.
+            redirect: "follow",
+        } as RequestInit & { duplex?: "half" });
+
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders(response),
+        });
+    } catch (error) {
+        console.error("Failed to proxy Studio API", target, error);
+        return Response.json({ success: false, message: "Studio 服务暂时不可用" }, { status: 502 });
+    }
+}
+
+export const GET = proxy;
+export const HEAD = proxy;
+export const POST = proxy;
+export const PUT = proxy;
+export const PATCH = proxy;
+export const DELETE = proxy;
+export const OPTIONS = proxy;

@@ -15,6 +15,8 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { isStudioManagedHost, studioLogout } from "@/services/studio-managed";
+import { useStudioSessionStore } from "@/stores/use-studio-session-store";
 
 type UserStatusActionsProps = {
     showConfig?: boolean;
@@ -30,7 +32,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const theme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
     const user = useUserStore((state) => state.user);
-    const logout = useUserStore((state) => state.clearSession);
+    const clearSession = useUserStore((state) => state.clearSession);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const canvasTheme = canvasThemes[theme];
     const userName = user?.displayName || user?.username || "";
@@ -42,13 +44,25 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const versionStyle = iconStyle;
     const gitHubClassName = "size-7 text-base";
     const gitHubStyle = iconStyle;
+    const studioHost = isStudioManagedHost();
     const avatarStyle: CSSProperties | undefined = variant === "canvas" ? { borderColor: canvasTheme.toolbar.border, color: canvasTheme.node.text, background: "transparent" } : undefined;
     const menuItems: ItemType[] = [
         { key: "user", disabled: true, label: <span className="font-medium text-current">{userName}</span> },
         ...(user?.role === "admin" ? [{ key: "admin", icon: <Shield className="size-4" />, label: <Link href="/admin">管理后台</Link> }] : []),
         ...(onOpenShortcuts ? [{ key: "shortcuts", icon: <Keyboard className="size-4" />, label: "快捷键", onClick: onOpenShortcuts }] : []),
         { type: "divider" },
-        { key: "logout", icon: <LogOut className="size-4" />, label: "退出登录", onClick: logout },
+        {
+            key: "logout",
+            icon: <LogOut className="size-4" />,
+            label: "退出登录",
+            onClick: () => {
+                if (studioHost) void studioLogout().catch(() => {}).finally(() => {
+                    useStudioSessionStore.getState().clear();
+                    clearSession();
+                });
+                else clearSession();
+            },
+        },
     ];
 
     return (
@@ -60,7 +74,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
             ) : null}
             <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={naturalIconClass} style={iconStyle} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} />
             <VersionReleaseModal style={versionStyle} />
-            <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} />
+            {!studioHost ? <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} /> : null}
             {variant === "canvas" && user ? (
                 <Tooltip title="当前算力点余额" placement="bottom">
                     <div className="flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium tabular-nums opacity-75 transition hover:opacity-100" style={{ color: canvasTheme.node.text }}>

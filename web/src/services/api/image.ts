@@ -7,6 +7,7 @@ import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { isStudioManagedHost, studioApi } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
@@ -38,6 +39,20 @@ type ChatImagesApiResponse = {
 };
 
 type GeneratedImage = { id: string; dataUrl: string; seed?: number };
+type StudioImageJob = {
+    jobId: string;
+    status: string;
+    model?: string;
+    capability?: string;
+    credits?: number;
+    error?: string;
+    createdAt?: number;
+    startedAt?: number;
+    completedAt?: number;
+    resultReady?: boolean;
+    resultUrl?: string;
+    previewUrls?: string[];
+};
 export type CanvasImageTask = {
     id: string;
     parent_task_id?: string;
@@ -529,11 +544,13 @@ function withPromptGuard(config: AiConfig, prompt: string) {
 }
 
 function usesAccountProxy(config: AiConfig) {
+    if (isStudioManagedHost()) return true;
     const token = useUserStore.getState().token;
     return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
 }
 
 export function aiApiUrl(config: AiConfig, path: string) {
+    if (isStudioManagedHost()) return studioApi(`/v1${path}`);
     if (usesAccountProxy(config)) return `/api/v1${path}`;
     const channel = localChannelForActiveModel(config);
     return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
@@ -1020,6 +1037,9 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
     }
     const params = createImageRequestParams({ ...config, count: "1" });
     const request = await createCanvasImageTaskRequest({ ...config, count: "1" }, prompt, references, params, options);
+    if (isStudioManagedHost()) {
+        return createStudioCanvasImageTask(request, references.length > 0, options);
+    }
     const response = await fetch("/api/v1/canvas/image-tasks", request);
     if (!response.ok) {
         const error = await fetchErrorDetail(response, "图片任务创建失败");
@@ -1032,6 +1052,9 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
 }
 
 export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasImageTask> {
+    if (isStudioManagedHost() && taskId.startsWith("job_")) {
+        return pollStudioCanvasImageTask(taskId);
+    }
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录后再使用云端渠道");
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(taskId)}`, {
@@ -1044,6 +1067,98 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
     return payload.data;
+}
+
+async function createStudioCanvasImageTask(request: RequestInit, isEdit: boolean, options: CanvasImageTaskOptions): Promise<CanvasImageTask> {
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("x-model-channel-id");
+    headers.delete("x-user-model-channel-id");
+    headers.set("Idempotency-Key", options.clientTaskId || `image_${nanoid()}`);
+
+    let body = request.body;
+    if (typeof body === "string") {
+        const envelope = JSON.parse(body) as { request?: unknown };
+        body = JSON.stringify(envelope.request ?? envelope);
+        headers.set("Content-Type", "application/json");
+    } else if (body instanceof FormData) {
+        // Fields prefixed with _canvas_ belong to the retired Go task API.
+        for (const key of Array.from(body.keys())) {
+            if (key.startsWith("_canvas_")) body.delete(key);
+        }
+        headers.delete("content-type");
+    }
+
+    const response = await fetch(studioApi(`/jobs/image/${isEdit ? "edits" : "generations"}`), {
+        method: "POST",
+        headers,
+        body,
+    });
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "图片任务创建失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
+    const payload = (await response.json()) as { success?: boolean; message?: string; job?: StudioImageJob };
+    if (!payload.success || !payload.job) throw new ImageRequestError(payload.message || "图片任务创建失败", payload);
+    return studioImageJobToCanvasTask(payload.job, options);
+}
+
+async function pollStudioCanvasImageTask(taskId: string): Promise<CanvasImageTask> {
+    return fetchStudioCanvasImageTask(taskId, 10);
+}
+
+async function fetchStudioCanvasImageTask(taskId: string, waitSeconds: number): Promise<CanvasImageTask> {
+    const response = await fetch(`${studioApi(`/jobs/${encodeURIComponent(taskId)}`)}?wait=${Math.max(0, Math.min(25, waitSeconds))}`, { cache: "no-store" });
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "读取图片任务失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
+    const payload = (await response.json()) as { success?: boolean; message?: string; job?: StudioImageJob };
+    if (!payload.success || !payload.job) throw new ImageRequestError(payload.message || "读取图片任务失败", payload);
+    const task = studioImageJobToCanvasTask(payload.job);
+    if (payload.job.resultReady) {
+        const result = await fetch(studioApi(`/jobs/${encodeURIComponent(taskId)}/result`), { cache: "no-store" });
+        if (!result.ok) {
+            const error = await fetchErrorDetail(result, "读取图片结果失败");
+            throw new ImageRequestError(error.message, error.detail);
+        }
+        const images = parseImagePayload((await result.json()) as ImageApiResponse, IMAGE_MIME);
+        task.image_urls = images.map((image) => image.dataUrl);
+        task.image_url = task.image_urls[0];
+        task.url = task.image_url;
+        task.status = "completed";
+        task.progress = 100;
+    }
+    return task;
+}
+
+function studioImageJobToCanvasTask(job: StudioImageJob, options: CanvasImageTaskOptions = {}): CanvasImageTask {
+    const status = normalizeStudioImageJobStatus(job.status);
+    const previewUrls = Array.isArray(job.previewUrls) ? job.previewUrls.filter((url): url is string => typeof url === "string" && Boolean(url.trim())) : [];
+    return {
+        id: job.jobId,
+        source: options.source || "canvas",
+        source_id: options.sourceId || "",
+        node_id: options.nodeId || "",
+        model: job.model,
+        status,
+        progress: status === "completed" ? 100 : status === "processing" ? 50 : 0,
+        image_url: previewUrls[0],
+        image_urls: previewUrls.length ? previewUrls : undefined,
+        url: previewUrls[0],
+        created_at: job.createdAt ? new Date(job.createdAt * 1000).toISOString() : undefined,
+        started_at: job.startedAt ? new Date(job.startedAt * 1000).toISOString() : undefined,
+        completed_at: job.completedAt ? new Date(job.completedAt * 1000).toISOString() : undefined,
+        error: job.error ? { message: job.error } : undefined,
+        error_detail: job.error || undefined,
+    };
+}
+
+function normalizeStudioImageJobStatus(status: string) {
+    const value = status.trim().toLowerCase();
+    if (["succeeded", "completed", "success"].includes(value)) return "completed";
+    if (["failed", "error", "cancelled", "canceled"].includes(value)) return "failed";
+    return value === "queued" ? "queued" : "processing";
 }
 
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
@@ -1506,6 +1621,18 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
 
 export async function listCanvasImageTasks(config: AiConfig, sources: Array<"image-workbench" | "workflow" | "canvas"> = []) {
     if (!usesAccountProxy(config)) return [];
+    if (isStudioManagedHost()) {
+        const response = await fetch(studioApi("/jobs?limit=200"), { cache: "no-store" });
+        if (!response.ok) {
+            const error = await fetchErrorDetail(response, "读取图片任务失败");
+            throw new ImageRequestError(error.message, error.detail);
+        }
+        const payload = (await response.json()) as { success?: boolean; message?: string; jobs?: StudioImageJob[] };
+        if (!payload.success || !Array.isArray(payload.jobs)) throw new ImageRequestError(payload.message || "读取图片任务失败", payload);
+        return payload.jobs
+            .filter((job) => !job.capability || job.capability === "image")
+            .map((job) => studioImageJobToCanvasTask(job, { source: sources[0] || "canvas" }));
+    }
     const query = sources.length ? `?${sources.map((source) => `source=${encodeURIComponent(source)}`).join("&")}` : "";
     const response = await fetch(`/api/v1/canvas/image-tasks${query}`, {
         headers: aiHeaders(config),
@@ -1522,6 +1649,10 @@ export async function listCanvasImageTasks(config: AiConfig, sources: Array<"ima
 export async function batchCanvasImageTaskStatus(config: AiConfig, ids: string[]) {
     const taskIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if (!usesAccountProxy(config) || !taskIds.length) return [];
+    if (isStudioManagedHost()) {
+        const jobs = await Promise.all(taskIds.filter((id) => id.startsWith("job_")).map((id) => fetchStudioCanvasImageTask(id, 0)));
+        return jobs;
+    }
     const response = await fetch("/api/v1/canvas/image-tasks/status", {
         method: "POST",
         headers: aiHeaders(config, "application/json"),
@@ -1538,6 +1669,16 @@ export async function batchCanvasImageTaskStatus(config: AiConfig, ids: string[]
 
 export async function deleteCanvasImageTask(config: AiConfig, task?: CanvasImageTask | null) {
     if (!usesAccountProxy(config) || !task?.id) return;
+    if (isStudioManagedHost()) {
+        const response = await fetch(studioApi(`/jobs/${encodeURIComponent(task.id)}/cancel`), { method: "POST" });
+        if (!response.ok) {
+            const error = await fetchErrorDetail(response, "取消图片任务失败");
+            throw new ImageRequestError(error.message, error.detail);
+        }
+        const payload = (await response.json()) as { success?: boolean; message?: string };
+        if (!payload.success) throw new ImageRequestError(payload.message || "取消图片任务失败", payload);
+        return;
+    }
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(task.id)}`, {
         method: "DELETE",
         headers: aiHeaders(config),

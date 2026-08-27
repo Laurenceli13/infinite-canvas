@@ -10,6 +10,8 @@ import { useEffect } from "react";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { adminLayoutStyle } from "@/lib/app-theme";
 import { useUserStore } from "@/stores/use-user-store";
+import { isStudioManagedHost, studioLogout } from "@/services/studio-managed";
+import { useStudioSessionStore } from "@/stores/use-studio-session-store";
 
 const adminMenus = [
     { key: "/admin/users", icon: <UserOutlined />, label: "用户管理" },
@@ -28,6 +30,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
     const logout = useUserStore((state) => state.clearSession);
+    const studioHost = isStudioManagedHost();
+    const menus = studioHost
+        ? [{ key: "/admin/studio", icon: <SettingOutlined />, label: "Studio 管理" }]
+        : adminMenus;
     const activeKey = pathname.startsWith("/admin/settings")
         ? "/admin/settings"
         : pathname.startsWith("/admin/assets")
@@ -41,7 +47,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
               : pathname.startsWith("/admin/users")
                 ? "/admin/users"
                 : "";
-    const pageTitle = pathname.startsWith("/admin/settings") ? "系统设置" : pathname.startsWith("/admin/assets") ? "素材库管理" : pathname.startsWith("/admin/prompts") ? "提示词管理" : pathname.startsWith("/admin/ai-logs") ? "AI 日志" : pathname.startsWith("/admin/credit-logs") ? "算力点日志" : "用户管理";
+    const pageTitle = studioHost ? "Studio 管理后台" : pathname.startsWith("/admin/settings") ? "系统设置" : pathname.startsWith("/admin/assets") ? "素材库管理" : pathname.startsWith("/admin/prompts") ? "提示词管理" : pathname.startsWith("/admin/ai-logs") ? "AI 日志" : pathname.startsWith("/admin/credit-logs") ? "算力点日志" : "用户管理";
 
     useEffect(() => {
         if (!isReady) return;
@@ -75,7 +81,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     mode="inline"
                     selectedKeys={[activeKey]}
                     style={adminLayoutStyle.menu}
-                    items={adminMenus.map((item) => ({
+                    items={menus.map((item) => ({
                         ...item,
                         label: (
                             <Link href={item.key} style={{ color: "inherit" }}>
@@ -86,10 +92,20 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     }))}
                 />
                 <Flex vertical gap={8} style={{ position: "absolute", bottom: 0, insetInline: 0, padding: 12, borderTop: `1px solid ${antToken.colorBorder}`, background: antToken.colorBgContainer }}>
-                    <Button block icon={<HomeOutlined />} href="/canvas" target="_blank" rel="noreferrer">
+                    <Button block icon={<HomeOutlined />} href="/" target="_blank" rel="noreferrer">
                         前往画布
                     </Button>
-                    <Button block icon={<LogoutOutlined />} onClick={logout}>
+                    <Button block icon={<LogoutOutlined />} onClick={() => {
+                        if (studioHost) void studioLogout().catch(() => {}).finally(() => {
+                            useStudioSessionStore.getState().clear();
+                            logout();
+                            router.replace("/login");
+                        });
+                        else {
+                            logout();
+                            router.replace("/login");
+                        }
+                    }}>
                         退出登录
                     </Button>
                 </Flex>

@@ -9,6 +9,8 @@ import { fetchUserConfig } from "@/services/api/user-config";
 import { defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider } from "@/services/image-storage";
 import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { catalogToConfigPatch, fetchStudioCatalog, isStudioManagedHost, studioSelf } from "@/services/studio-managed";
+import { useStudioSessionStore } from "@/stores/use-studio-session-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -16,6 +18,8 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const pathname = usePathname();
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
+    const setSession = useUserStore((state) => state.setSession);
+    const clearSession = useUserStore((state) => state.clearSession);
     const hydrateUser = useUserStore((state) => state.hydrateUser);
     const loadPublicSettings = useConfigStore((state) => state.loadPublicSettings);
     const publicSettings = useConfigStore((state) => state.publicSettings);
@@ -26,10 +30,44 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const adminRemoteTokenRef = useRef("");
 
     useEffect(() => {
+        if (!isStudioManagedHost()) return;
+        let cancelled = false;
+        const bootstrap = async () => {
+            try {
+                const [studioUser, models] = await Promise.all([studioSelf(), fetchStudioCatalog()]);
+                if (cancelled) return;
+                useStudioSessionStore.getState().setUser(studioUser);
+                useStudioSessionStore.getState().setReady(true);
+                setSession("studio-session", {
+                    id: studioUser.id,
+                    username: studioUser.username,
+                    displayName: studioUser.username,
+                    avatarUrl: "",
+                    role: studioUser.role === "studio_admin" ? "admin" : "user",
+                    credits: Number(studioUser.points || 0),
+                    createdAt: "",
+                    updatedAt: "",
+                });
+                const patch = catalogToConfigPatch(useConfigStore.getState().config, models);
+                Object.entries(patch).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+            } catch {
+                if (!cancelled) {
+                    useStudioSessionStore.getState().setReady(true);
+                    clearSession();
+                }
+            }
+        };
+        void bootstrap();
+        return () => { cancelled = true; };
+    }, [clearSession, setSession, updateConfig]);
+
+    useEffect(() => {
+        if (isStudioManagedHost()) return;
         void loadPublicSettings();
     }, [loadPublicSettings]);
 
     useEffect(() => {
+        if (isStudioManagedHost()) return;
         if (!isLoginPage) void hydrateUser();
     }, [hydrateUser, isLoginPage]);
 

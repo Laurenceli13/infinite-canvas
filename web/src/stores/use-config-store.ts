@@ -62,6 +62,9 @@ export type AiConfig = {
     videoModels: string[];
     textModels: string[];
     audioModels: string[];
+    modelDisplayNames: Record<string, string>;
+    modelCosts: Array<{ model: string; credits: number }>;
+    modelPricingRules: Array<{ model: string; rules: Record<string, unknown> }>;
     quality: string;
     size: string;
     videoSize: string;
@@ -135,6 +138,9 @@ export const defaultConfig: AiConfig = {
     videoModels: [],
     textModels: [],
     audioModels: [],
+    modelDisplayNames: {},
+    modelCosts: [],
+    modelPricingRules: [],
     quality: "auto",
     size: "1:1",
     videoSize: "1280x720",

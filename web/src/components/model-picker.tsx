@@ -80,7 +80,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                 title={current || placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelDisplayName(current) : placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -112,10 +112,21 @@ function ModelLabel({ model, channelName }: { model: string; channelName?: strin
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{model}</span>
+            <span className="truncate">{modelDisplayName(model)}</span>
             {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
         </span>
     );
+}
+
+function modelDisplayName(model: string) {
+    if (typeof window === "undefined") return model;
+    try {
+        const raw = window.localStorage.getItem("infinite-canvas:ai_config_store");
+        const parsed = raw ? JSON.parse(raw) as { state?: { config?: { modelDisplayNames?: Record<string, string> } } } : null;
+        return parsed?.state?.config?.modelDisplayNames?.[model] || model;
+    } catch {
+        return model;
+    }
 }
 
 function ModelIcon({ model }: { model: string }) {
