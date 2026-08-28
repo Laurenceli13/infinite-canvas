@@ -22,6 +22,16 @@ const adminMenus = [
     { key: "/admin/settings", icon: <SettingOutlined />, label: "系统设置" },
 ];
 
+const studioMenus = [
+    { key: "/admin/studio?tab=providers", icon: <SettingOutlined />, label: "渠道供应商" },
+    { key: "/admin/studio?tab=models", icon: <SettingOutlined />, label: "模型目录" },
+    { key: "/admin/studio?tab=concurrency", icon: <SettingOutlined />, label: "轮询与并发" },
+    { key: "/admin/studio?tab=usage", icon: <AuditOutlined />, label: "使用/错误记录" },
+    { key: "/admin/studio?tab=workflows", icon: <FileTextOutlined />, label: "默认工作流" },
+    { key: "/admin/studio?tab=accounts", icon: <UserOutlined />, label: "用户与账本" },
+    { key: "/admin/studio?tab=pricing", icon: <TransactionOutlined />, label: "积分设置" },
+];
+
 export default function AdminLayout({ children }: { children: ReactNode }) {
     const { token: antToken } = theme.useToken();
     const router = useRouter();
@@ -31,10 +41,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const isReady = useUserStore((state) => state.isReady);
     const logout = useUserStore((state) => state.clearSession);
     const studioHost = isStudioManagedHost();
-    const menus = studioHost
-        ? [{ key: "/admin/studio", icon: <SettingOutlined />, label: "Studio 管理" }]
-        : adminMenus;
-    const activeKey = pathname.startsWith("/admin/settings")
+    const menus = studioHost ? studioMenus : adminMenus;
+    const activeKey = studioHost
+        ? "/admin/studio?tab=providers"
+        : pathname.startsWith("/admin/settings")
         ? "/admin/settings"
         : pathname.startsWith("/admin/assets")
           ? "/admin/assets"

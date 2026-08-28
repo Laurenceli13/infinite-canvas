@@ -1,8 +1,8 @@
 "use client";
 
-import type { CSSProperties, RefObject } from "react";
+import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import { Avatar, Dropdown, Tooltip } from "antd";
-import { Keyboard, LogOut, Settings2, Shield } from "lucide-react";
+import { Keyboard, LogOut, Settings2 } from "lucide-react";
 import type { ItemType } from "antd/es/menu/interface";
 import Link from "next/link";
 
@@ -44,11 +44,14 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const versionStyle = iconStyle;
     const gitHubClassName = "size-7 text-base";
     const gitHubStyle = iconStyle;
-    const studioHost = isStudioManagedHost();
+    const [hostReady, setHostReady] = useState(false);
+    const studioHost = hostReady && isStudioManagedHost();
+    useEffect(() => {
+        setHostReady(true);
+    }, []);
     const avatarStyle: CSSProperties | undefined = variant === "canvas" ? { borderColor: canvasTheme.toolbar.border, color: canvasTheme.node.text, background: "transparent" } : undefined;
     const menuItems: ItemType[] = [
         { key: "user", disabled: true, label: <span className="font-medium text-current">{userName}</span> },
-        ...(user?.role === "admin" ? [{ key: "admin", icon: <Shield className="size-4" />, label: <Link href="/admin">管理后台</Link> }] : []),
         ...(onOpenShortcuts ? [{ key: "shortcuts", icon: <Keyboard className="size-4" />, label: "快捷键", onClick: onOpenShortcuts }] : []),
         { type: "divider" },
         {
@@ -56,10 +59,13 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
             icon: <LogOut className="size-4" />,
             label: "退出登录",
             onClick: () => {
-                if (studioHost) void studioLogout().catch(() => {}).finally(() => {
-                    useStudioSessionStore.getState().clear();
-                    clearSession();
-                });
+                if (studioHost)
+                    void studioLogout()
+                        .catch(() => {})
+                        .finally(() => {
+                            useStudioSessionStore.getState().clear();
+                            clearSession();
+                        });
                 else clearSession();
             },
         },
@@ -73,8 +79,8 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 </button>
             ) : null}
             <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={naturalIconClass} style={iconStyle} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} />
-            <VersionReleaseModal style={versionStyle} />
-            {!studioHost ? <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} /> : null}
+            {user?.role === "admin" ? <VersionReleaseModal style={versionStyle} /> : null}
+            {hostReady && !studioHost ? <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} /> : null}
             {variant === "canvas" && user ? (
                 <Tooltip title="当前算力点余额" placement="bottom">
                     <div className="flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium tabular-nums opacity-75 transition hover:opacity-100" style={{ color: canvasTheme.node.text }}>

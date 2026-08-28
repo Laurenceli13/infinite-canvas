@@ -148,7 +148,7 @@ export const defaultConfig: AiConfig = {
     canvasImageCount: "1",
     timeout: "600",
     apiMode: "images",
-    streamImages: "",
+    streamImages: "1",
     streamPartialImages: "1",
     responseFormatB64Json: "",
     codexCli: "",

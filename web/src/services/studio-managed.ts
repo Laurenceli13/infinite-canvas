@@ -68,6 +68,43 @@ export type StudioConcurrencyConfig = {
     defaultLimit: number;
     runningTotal: number;
     queuedTotal: number;
+    users?: Array<{
+        source: string;
+        userId: string;
+        username?: string;
+        email?: string;
+        running: number;
+        queued: number;
+        overrideLimit?: number | null;
+        effectiveLimit: number;
+    }>;
+};
+
+export type StudioWorkflow = {
+    key: string;
+    name: string;
+    description: string;
+    enabled: boolean;
+    accessMode: "all" | "selected";
+    allowedUsers: string[];
+    updatedAt: number;
+};
+
+export type StudioAccount = {
+    source: string;
+    userId: string;
+    username: string;
+    email: string;
+    balance: number;
+    points: number;
+    updatedAt: number;
+};
+
+export type StudioPricingSettings = {
+    pointsPerDollar: number;
+    sourceBalanceUnitsPerDollar: number;
+    massmoreSourceBalanceUnitsPerDollar: number;
+    mtlineSourceBalanceUnitsPerDollar: number;
 };
 
 type Envelope<T> = T & { success?: boolean; message?: string };
@@ -178,9 +215,46 @@ export async function updateStudioConcurrencySettings(globalLimit: number, defau
     return response.data;
 }
 
-export async function fetchStudioUsage() {
-    const response = await axios.get<Envelope<{ usage: StudioUsage[] }>>(studioApi("/admin/usage"));
+export async function updateStudioUserConcurrency(source: string, userId: string, limit: number) {
+    const response = await axios.patch<Envelope<{ limit: number }>>(studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`), { limit });
+    return response.data;
+}
+
+export async function resetStudioUserConcurrency(source: string, userId: string) {
+    await axios.delete(studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`));
+}
+
+export async function fetchStudioUsage(params?: { status?: string }) {
+    const response = await axios.get<Envelope<{ usage: StudioUsage[] }>>(studioApi("/admin/usage"), { params });
     return response.data.usage || [];
+}
+
+export async function fetchStudioWorkflows() {
+    const response = await axios.get<Envelope<{ workflows: StudioWorkflow[] }>>(studioApi("/admin/workflows"));
+    return response.data.workflows || [];
+}
+
+export async function fetchStudioWorkflowUsers() {
+    const response = await axios.get<Envelope<{ users: Array<{ value: string; label: string }> }>>(studioApi("/admin/workflow-users"));
+    return response.data.users || [];
+}
+
+export async function updateStudioWorkflow(key: string, payload: { enabled: boolean; accessMode: "all" | "selected"; allowedUsers: string[] }) {
+    await axios.patch(studioApi(`/admin/workflows/${encodeURIComponent(key)}`), payload);
+}
+
+export async function fetchStudioAccounts() {
+    const response = await axios.get<Envelope<{ users: StudioAccount[] }>>(studioApi("/admin/users"));
+    return response.data.users || [];
+}
+
+export async function fetchStudioPricingSettings() {
+    const response = await axios.get<Envelope<{ pricing: StudioPricingSettings }>>(studioApi("/admin/settings"));
+    return response.data.pricing;
+}
+
+export async function updateStudioPricingSettings(payload: Partial<StudioPricingSettings>) {
+    await axios.patch(studioApi("/admin/settings"), payload);
 }
 
 export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): Partial<AiConfig> {

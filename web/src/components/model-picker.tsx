@@ -77,10 +77,11 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current || placeholder}
+                title={current ? modelDisplayName(config, current) : placeholder}
+                aria-label={current ? modelDisplayName(config, current) : placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelDisplayName(current) : placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelDisplayName(config, current) : placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -94,8 +95,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             >
                 {options.length ? (
                     options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${option.model} ${option.channelName}`}>
-                            <ModelLabel model={option.model} channelName={option.channelName} />
+                        <SelectItem key={option.key} value={option.key} textValue={modelDisplayName(config, option.model)}>
+                            <ModelLabel config={config} model={option.model} />
                         </SelectItem>
                     ))
                 ) : (
@@ -108,25 +109,21 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     );
 }
 
-function ModelLabel({ model, channelName }: { model: string; channelName?: string }) {
+function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{modelDisplayName(model)}</span>
-            {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
+            <span className="truncate">{modelDisplayName(config, model)}</span>
         </span>
     );
 }
 
-function modelDisplayName(model: string) {
-    if (typeof window === "undefined") return model;
-    try {
-        const raw = window.localStorage.getItem("infinite-canvas:ai_config_store");
-        const parsed = raw ? JSON.parse(raw) as { state?: { config?: { modelDisplayNames?: Record<string, string> } } } : null;
-        return parsed?.state?.config?.modelDisplayNames?.[model] || model;
-    } catch {
-        return model;
-    }
+function modelDisplayName(config: AiConfig, model: string) {
+    const direct = config.modelDisplayNames?.[model];
+    if (direct) return direct;
+    const separatorIndex = model.lastIndexOf("::");
+    const unqualified = separatorIndex >= 0 ? model.slice(separatorIndex + 2) : model;
+    return config.modelDisplayNames?.[unqualified] || unqualified;
 }
 
 function ModelIcon({ model }: { model: string }) {

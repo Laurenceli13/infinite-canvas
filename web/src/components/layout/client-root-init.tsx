@@ -31,6 +31,16 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!isStudioManagedHost()) return;
+        const migrationKey = "studio-managed:stream-default-v1";
+        if (window.localStorage.getItem(migrationKey) === "1") return;
+        const current = useConfigStore.getState().config;
+        if (current.streamImages !== "1") updateConfig("streamImages", "1");
+        if (current.streamPartialImages !== "1") updateConfig("streamPartialImages", "1");
+        window.localStorage.setItem(migrationKey, "1");
+    }, [updateConfig]);
+
+    useEffect(() => {
+        if (!isStudioManagedHost()) return;
         let cancelled = false;
         const bootstrap = async () => {
             try {

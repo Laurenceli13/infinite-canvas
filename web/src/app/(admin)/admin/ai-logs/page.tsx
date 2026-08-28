@@ -2,12 +2,16 @@
 
 import { DeleteOutlined, EyeOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { App, Button, Card, Flex, Form, Input, InputNumber, Modal, Space, Switch, Table, Tag, Typography } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { deleteAdminAICallLogs, fetchAdminAICallLogs, fetchAdminSettings, saveAdminSettings, type AdminAICallLog } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 export default function AdminAICallLogsPage() {
+    return <Suspense fallback={null}><AdminAICallLogsContent /></Suspense>;
+}
+
+function AdminAICallLogsContent() {
     const token = useUserStore((state) => state.token);
     const { message } = App.useApp();
     const [keyword, setKeyword] = useState("");

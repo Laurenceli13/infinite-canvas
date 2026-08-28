@@ -375,7 +375,7 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ theme, onInsert }: { t
         queryFn: () => fetchPrompts({ page: 1, pageSize: 1 }),
         retry: false,
     });
-    const categories = useMemo(() => ["system", ...(categoryQuery.data?.categories.filter((category) => category !== "system") || [])], [categoryQuery.data?.categories]);
+    const categories = useMemo(() => categoryQuery.data?.categories || [], [categoryQuery.data?.categories]);
 
     return (
         <div className="flex h-full flex-col">

@@ -432,7 +432,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const pollingVideoNodeIdsRef = useRef(new Set<string>());
-    const pollingImageNodeIdsRef = useRef(new Set<string>());
+    const pollingImageTaskIdsRef = useRef(new Set<string>());
     const pollingAudioNodeIdsRef = useRef(new Set<string>());
     const hasLoadingTimedNodes = nodes.some((node) => node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && (node.type === CanvasNodeType.Video || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Audio));
 
@@ -577,20 +577,37 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         pollingVideoNodeIdsRef.current.delete(node.id);
                     });
             });
-            // A managed job can expose a preview URL before its final response is durable.
-            // Keep polling nodes with preview content until the job reaches a terminal state.
-            const imageTargets = nodesRef.current.filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && node.metadata.imageTaskId);
-            imageTargets.forEach((node) => {
-                if (pollingImageNodeIdsRef.current.has(node.id) || !node.metadata?.imageTaskId) return;
-                pollingImageNodeIdsRef.current.add(node.id);
-                void pollCanvasImageTaskStatus(node.metadata.imageTaskId)
+            // Poll once per managed job, then fan the result out to every node that
+            // references it. This prevents batch root/child nodes from competing for
+            // the same result and keeps transient result-download failures retryable.
+            const imageTargetsByTaskId = new Map<string, CanvasNodeData[]>();
+            nodesRef.current
+                .filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && node.metadata.imageTaskId)
+                .forEach((node) => {
+                    const taskId = node.metadata?.imageTaskId;
+                    if (!taskId || taskId.startsWith("client_image_task_")) return;
+                    const targets = imageTargetsByTaskId.get(taskId) || [];
+                    targets.push(node);
+                    imageTargetsByTaskId.set(taskId, targets);
+                });
+            imageTargetsByTaskId.forEach((targets, taskId) => {
+                if (pollingImageTaskIdsRef.current.has(taskId)) return;
+                pollingImageTaskIdsRef.current.add(taskId);
+                void pollCanvasImageTaskStatus(taskId)
                     .then((task) => {
-                        setNodes((prev) => applyCanvasImageTaskUpdate(prev, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
-                        setConnections((prev) => applyCanvasImageTaskConnections(prev, node.id, task));
+                        const targetIds = new Set(targets.map((target) => target.id));
+                        setNodes((prev) => {
+                            let next = prev;
+                            prev.filter((node) => targetIds.has(node.id) || node.metadata?.imageTaskId === taskId).forEach((node) => {
+                                next = applyCanvasImageTaskUpdate(next, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height });
+                            });
+                            return next;
+                        });
+                        setConnections((prev) => targets.reduce((next, target) => applyCanvasImageTaskConnections(next, target.id, task), prev));
                     })
                     .catch(() => undefined)
                     .finally(() => {
-                        pollingImageNodeIdsRef.current.delete(node.id);
+                        pollingImageTaskIdsRef.current.delete(taskId);
                     });
             });
             const audioTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Audio && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.audioTaskId);
@@ -2674,7 +2691,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                                     const root = prev.find((node) => node.id === rootId);
                                     return prev.map((node) => {
                                         if (node.id !== targetId && node.id !== rootId) return node;
-                                        if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId)) {
+                                        if (node.id === rootId && (targetId === rootId || targetId === primaryTargetId)) {
                                             return { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: task.id, imageTaskResultId: undefined, primaryImageId: targetId, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined } };
                                         }
                                         if (node.id === targetId) {
@@ -2827,7 +2844,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                                     const root = prev.find((node) => node.id === rootId);
                                     return prev.map((node) => {
                                         if (node.id !== targetId && node.id !== rootId) return node;
-                                        if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId))
+                                        if (node.id === rootId && (targetId === rootId || targetId === primaryTargetId))
                                             return {
                                                 ...node,
                                                 metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: task.id, imageTaskResultId: undefined, primaryImageId: targetId, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined },
