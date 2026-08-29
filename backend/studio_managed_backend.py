@@ -102,6 +102,7 @@ ASYNC_SHARED_SECRET = os.environ.get("STUDIO_ASYNC_SHARED_SECRET", "").strip()
 ASYNC_SHARED_SECRET_FILE = os.environ.get("STUDIO_ASYNC_SHARED_SECRET_FILE", "").strip()
 ASYNC_JOB_DIR = Path(os.environ.get("STUDIO_ASYNC_JOB_DIR", str(DATA_DIR / "jobs")))
 ASYNC_KILL_SWITCH_FILE = Path(os.environ.get("STUDIO_ASYNC_KILL_SWITCH_FILE", "/etc/studio-managed/async-disabled"))
+RESULT_MIRROR_CONCURRENCY = max(1, int(os.environ.get("STUDIO_RESULT_MIRROR_CONCURRENCY", "4")))
 
 _IMAGE_UPSTREAM_SLOTS: dict[str, threading.BoundedSemaphore] = {}
 _IMAGE_UPSTREAM_SLOTS_LOCK = threading.Lock()
@@ -111,6 +112,7 @@ _JOB_WAKE_EVENT = threading.Event()
 _JOB_STOP_EVENT = threading.Event()
 _CLEANUP_WAKE_EVENT = threading.Event()
 _JOB_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=ASYNC_EXECUTOR_WORKERS, thread_name_prefix="studio-job")
+_RESULT_MIRROR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=RESULT_MIRROR_CONCURRENCY, thread_name_prefix="studio-result-mirror")
 _JOB_FUTURES: dict[str, concurrent.futures.Future[Any]] = {}
 _JOB_FUTURES_LOCK = threading.Lock()
 _AUTH_RATE_LOCK = threading.Lock()
@@ -1360,23 +1362,43 @@ def session_from_generation_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def store_generation_result(job: dict[str, Any], body: bytes, content_type: str) -> tuple[str, str, str]:
+def store_generation_result(job: dict[str, Any], body: bytes) -> str:
+    """Persist a result locally before doing any optional object-storage mirror.
+
+    The local file is the authenticated delivery source for the browser. R2 is
+    still populated below, but a slow Worker upload must not keep a completed
+    generation in the running state or delay the first result download.
+    """
     job_dir = generation_job_dir(job["job_id"])
     result_file = job_dir / "result.bin"
     result_file.write_bytes(body)
     ensure_private_path(result_file, 0o600)
+    return str(result_file)
+
+
+def mirror_generation_result_to_r2(job: dict[str, Any], result_file: str, content_type: str) -> tuple[str, str]:
+    """Mirror a locally available result without making delivery depend on it."""
     r2_key = generation_result_r2_key(job["job_id"])
-    transport = str(job.get("transport") or "")
     try:
-        response = async_worker_stream_upload(f"/assets/{r2_key}", result_file, content_type, timeout=60)
+        response = async_worker_stream_upload(f"/assets/{r2_key}", Path(result_file), content_type, timeout=120)
         if response.status_code >= 400:
             raise StudioError(response.status_code, response.text[:500] or response.reason)
-        transport = "cloudflare_queue+r2"
+        return r2_key, "cloudflare_queue+r2"
     except Exception as exc:
-        r2_key = ""
-        transport = f"{transport or 'local'}+local_result"
         record_generation_event(job["job_id"], "r2_fallback", str(exc))
-    return str(result_file), r2_key, transport
+        return "", "local_result"
+
+
+def mirror_generation_result_in_background(job: dict[str, Any], result_file: str, content_type: str) -> None:
+    r2_key, transport = mirror_generation_result_to_r2(job, result_file, content_type)
+    if not r2_key:
+        return
+    with db() as conn:
+        conn.execute(
+            "update studio_generation_jobs set result_r2_key=?,transport=?,updated_at=? where job_id=?",
+            (r2_key, transport, now(), job["job_id"]),
+        )
+    record_generation_event(job["job_id"], "r2_mirrored")
 
 
 def execute_generation_job(job_id: str) -> None:
@@ -1447,7 +1469,7 @@ def execute_generation_job(job_id: str) -> None:
             partial_refund = float(job["unit_price"] or 0) * failed_count
             refund_usage_delta(session, job["usage_key"], partial_refund, "partial image failure", "partial-image")
             refunded_credits += partial_refund
-        result_file, r2_key, transport = store_generation_result(job, result_body, result_content_type)
+        result_file = store_generation_result(job, result_body)
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         mark_usage(
             job["usage_key"],
@@ -1458,6 +1480,9 @@ def execute_generation_job(job_id: str) -> None:
             credits=actual_credits,
             balance_delta=actual_delta,
         )
+        # Make the local result available before the optional R2 mirror. The
+        # browser can now download this job as soon as the provider response is
+        # complete, even if the Worker/object-storage path is slow.
         with db() as conn:
             conn.execute(
                 """
@@ -1466,9 +1491,15 @@ def execute_generation_job(job_id: str) -> None:
                     result_content_type=?,transport=?,completed_at=?,updated_at=?,error=''
                 where job_id=?
                 """,
-                (success_count, failed_count, actual_credits, result_file, r2_key, result_content_type, transport, now(), now(), job_id),
+                (success_count, failed_count, actual_credits, result_file, "", result_content_type, "local_result", now(), now(), job_id),
             )
         record_generation_event(job_id, "succeeded", f"success={success_count},failed={failed_count},elapsed_ms={elapsed_ms}")
+        try:
+            _RESULT_MIRROR_EXECUTOR.submit(mirror_generation_result_in_background, job, result_file, result_content_type)
+        except Exception as exc:
+            # The result is already delivered locally. A mirror scheduling
+            # failure must never turn a successful generation into a refund.
+            record_generation_event(job_id, "r2_mirror_schedule_failed", str(exc))
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         try:
@@ -3968,6 +3999,36 @@ class Handler(BaseHTTPRequestHandler):
                 if job_match.group(2):
                     self.handle_generation_job_result(job)
                 else:
+                    wait_seconds = 0
+                    try:
+                        wait_seconds = max(0, min(25, int((urllib.parse.parse_qs(parsed.query).get("wait") or ["0"])[0])))
+                    except (TypeError, ValueError):
+                        wait_seconds = 0
+                    if wait_seconds:
+                        deadline = time.monotonic() + wait_seconds
+                        initial_signature = (
+                            job.get("status"),
+                            job.get("preview_urls"),
+                            job.get("result_file"),
+                            job.get("result_r2_key"),
+                            job.get("error"),
+                        )
+                        while time.monotonic() < deadline:
+                            time.sleep(0.25)
+                            with db() as conn:
+                                refreshed = conn.execute("select * from studio_generation_jobs where job_id=?", (job_match.group(1),)).fetchone()
+                            if refreshed:
+                                next_job = dict(refreshed)
+                                next_signature = (
+                                    next_job.get("status"),
+                                    next_job.get("preview_urls"),
+                                    next_job.get("result_file"),
+                                    next_job.get("result_r2_key"),
+                                    next_job.get("error"),
+                                )
+                                job = next_job
+                                if next_signature != initial_signature:
+                                    break
                     self.send_json(200, {"success": True, "job": public_generation_job(job)})
                 return
             if path.startswith("/studio-api/admin/"):

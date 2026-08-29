@@ -8,7 +8,7 @@ import { ChevronLeft, ChevronRight, Download, Globe2, Home, ImageIcon, Images, L
 import { saveAs } from "file-saver";
 
 import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
-import { createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
+import { createCanvasImageTask, IMAGE_POLL_INTERVAL_MS, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { channelProtocolForConfig, defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -498,36 +498,63 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             return;
         }
 
-        const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = syncAssistantReferences(project.chatSessions || [], restoredNodes, true);
-            setNodes(restoredNodes);
-            setConnections(project.connections);
-            setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setAgentConfig(project.agentConfig || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setViewport(project.viewport);
-            setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
-            const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
-            setAgentPanel(restoredAgentPanel);
-            setAssistantMounted(restoredAgentPanel.open);
-            historyRef.current = { past: [], future: [] };
-            if (historyCommitTimerRef.current) {
-                clearTimeout(historyCommitTimerRef.current);
-                historyCommitTimerRef.current = null;
-            }
-            lastHistoryRef.current = {
-                nodes: restoredNodes,
-                connections: project.connections,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
-            };
-            setHistoryState({ canUndo: false, canRedo: false });
-            setProjectLoaded(true);
+        let cancelled = false;
+        const initialNodes = resetInterruptedGeneration(project.nodes);
+        const restoredSessions = syncAssistantReferences(project.chatSessions || [], initialNodes, true);
+        setNodes(initialNodes);
+        setConnections(project.connections);
+        setChatSessions(restoredSessions);
+        setActiveChatId(project.activeChatId || null);
+        setAgentConfig(project.agentConfig || null);
+        setBackgroundMode(project.backgroundMode);
+        setShowImageInfo(project.showImageInfo || false);
+        setViewport(project.viewport);
+        setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
+        const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
+        setAgentPanel(restoredAgentPanel);
+        setAssistantMounted(restoredAgentPanel.open);
+        historyRef.current = { past: [], future: [] };
+        if (historyCommitTimerRef.current) {
+            clearTimeout(historyCommitTimerRef.current);
+            historyCommitTimerRef.current = null;
+        }
+        lastHistoryRef.current = {
+            nodes: initialNodes,
+            connections: project.connections,
+            backgroundMode: project.backgroundMode,
+            showImageInfo: project.showImageInfo || false,
         };
-        void restore();
+        setHistoryState({ canUndo: false, canRedo: false });
+        // Do not make the first canvas paint wait for remote media resolution
+        // or migration of legacy data URLs. The visible project is usable now.
+        setProjectLoaded(true);
+
+        void hydrateCanvasImages(initialNodes).then((hydratedNodes) => {
+            if (cancelled) return;
+            const sourceById = new Map(initialNodes.map((node) => [node.id, node]));
+            const hydratedById = new Map(hydratedNodes.map((node) => [node.id, node]));
+            const currentNodes = nodesRef.current;
+            const nextNodes = currentNodes.map((node) => {
+                const source = sourceById.get(node.id);
+                const hydrated = hydratedById.get(node.id);
+                if (!source || !hydrated) return node;
+                // Never overwrite a node that changed while background
+                // hydration was running.
+                if (node.metadata?.content !== source.metadata?.content || node.metadata?.storageKey !== source.metadata?.storageKey) return node;
+                return hydrated;
+            });
+            setNodes(nextNodes);
+            setChatSessions((current) => syncAssistantReferences(current, nextNodes, true));
+            if (currentNodes === initialNodes) {
+                lastHistoryRef.current = {
+                    nodes: nextNodes,
+                    connections: project.connections,
+                    backgroundMode: project.backgroundMode,
+                    showImageInfo: project.showImageInfo || false,
+                };
+            }
+        }).catch(() => undefined);
+        return () => { cancelled = true; };
     }, [hydrated, openProject, projectId, router]);
 
     useEffect(() => {
@@ -563,73 +590,83 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         if (!projectLoaded) return;
-        const pollCanvasTasks = () => {
-            const videoTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Video && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && canvasVideoTaskId(node.metadata));
-            videoTargets.forEach((node) => {
-                if (pollingVideoNodeIdsRef.current.has(node.id)) return;
-                const taskId = canvasVideoTaskId(node.metadata);
-                const generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
-                if (!taskId || !isAiConfigReady(generationConfig, generationConfig.model)) return;
-                pollingVideoNodeIdsRef.current.add(node.id);
-                void pollVideoGenerationTaskStatus(generationConfig, canvasVideoTaskFromMetadata(node.metadata))
-                    .then((task) => {
-                        setNodes((prev) => applyCanvasVideoTaskUpdate(prev, node.id, task, generationConfig, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
-                    })
-                    .catch(() => undefined)
-                    .finally(() => {
-                        pollingVideoNodeIdsRef.current.delete(node.id);
-                    });
-            });
-            // Poll once per managed job, then fan the result out to every node that
-            // references it. This prevents batch root/child nodes from competing for
-            // the same result and keeps transient result-download failures retryable.
-            const imageTargetsByTaskId = new Map<string, CanvasNodeData[]>();
-            nodesRef.current
-                .filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && node.metadata.imageTaskId)
-                .forEach((node) => {
-                    const taskId = node.metadata?.imageTaskId;
-                    if (!taskId || taskId.startsWith("client_image_task_")) return;
-                    const targets = imageTargetsByTaskId.get(taskId) || [];
-                    targets.push(node);
-                    imageTargetsByTaskId.set(taskId, targets);
-                });
-            imageTargetsByTaskId.forEach((targets, taskId) => {
-                if (pollingImageTaskIdsRef.current.has(taskId)) return;
-                pollingImageTaskIdsRef.current.add(taskId);
-                void pollCanvasImageTaskStatus(taskId)
-                    .then((task) => {
-                        const targetIds = new Set(targets.map((target) => target.id));
-                        setNodes((prev) => {
-                            let next = prev;
-                            prev.filter((node) => targetIds.has(node.id) || node.metadata?.imageTaskId === taskId).forEach((node) => {
-                                next = applyCanvasImageTaskUpdate(next, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height });
-                            });
-                            return next;
+        const pollCanvasTasks = (includeImages: boolean, includeMedia: boolean) => {
+            if (includeMedia) {
+                const videoTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Video && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && canvasVideoTaskId(node.metadata));
+                videoTargets.forEach((node) => {
+                    if (pollingVideoNodeIdsRef.current.has(node.id)) return;
+                    const taskId = canvasVideoTaskId(node.metadata);
+                    const generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
+                    if (!taskId || !isAiConfigReady(generationConfig, generationConfig.model)) return;
+                    pollingVideoNodeIdsRef.current.add(node.id);
+                    void pollVideoGenerationTaskStatus(generationConfig, canvasVideoTaskFromMetadata(node.metadata))
+                        .then((task) => {
+                            setNodes((prev) => applyCanvasVideoTaskUpdate(prev, node.id, task, generationConfig, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
+                        })
+                        .catch(() => undefined)
+                        .finally(() => {
+                            pollingVideoNodeIdsRef.current.delete(node.id);
                         });
-                        setConnections((prev) => targets.reduce((next, target) => applyCanvasImageTaskConnections(next, target.id, task), prev));
-                    })
-                    .catch(() => undefined)
-                    .finally(() => {
-                        pollingImageTaskIdsRef.current.delete(taskId);
+                });
+            }
+            if (includeImages) {
+                // Poll once per managed job, then fan the result out to every node
+                // that references it. Each image job gets its own long-poll and
+                // result download, so one slow image cannot serialize its siblings.
+                const imageTargetsByTaskId = new Map<string, CanvasNodeData[]>();
+                nodesRef.current
+                    .filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && node.metadata.imageTaskId)
+                    .forEach((node) => {
+                        const taskId = node.metadata?.imageTaskId;
+                        if (!taskId || taskId.startsWith("client_image_task_")) return;
+                        const targets = imageTargetsByTaskId.get(taskId) || [];
+                        targets.push(node);
+                        imageTargetsByTaskId.set(taskId, targets);
                     });
-            });
-            const audioTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Audio && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.audioTaskId);
-            audioTargets.forEach((node) => {
-                if (pollingAudioNodeIdsRef.current.has(node.id) || !node.metadata?.audioTaskId) return;
-                pollingAudioNodeIdsRef.current.add(node.id);
-                void pollCanvasAudioTaskStatus(node.metadata.audioTaskId)
-                    .then((task) => {
-                        setNodes((prev) => applyCanvasAudioTaskUpdate(prev, node.id, task, node.metadata?.startedAt || Date.now()));
-                    })
-                    .catch(() => undefined)
-                    .finally(() => {
-                        pollingAudioNodeIdsRef.current.delete(node.id);
-                    });
-            });
+                imageTargetsByTaskId.forEach((targets, taskId) => {
+                    if (pollingImageTaskIdsRef.current.has(taskId)) return;
+                    pollingImageTaskIdsRef.current.add(taskId);
+                    void pollCanvasImageTaskStatus(taskId)
+                        .then((task) => {
+                            const targetIds = new Set(targets.map((target) => target.id));
+                            setNodes((prev) => {
+                                let next = prev;
+                                prev.filter((node) => targetIds.has(node.id) || node.metadata?.imageTaskId === taskId).forEach((node) => {
+                                    next = applyCanvasImageTaskUpdate(next, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height });
+                                });
+                                return next;
+                            });
+                            setConnections((prev) => targets.reduce((next, target) => applyCanvasImageTaskConnections(next, target.id, task), prev));
+                        })
+                        .catch(() => undefined)
+                        .finally(() => {
+                            pollingImageTaskIdsRef.current.delete(taskId);
+                        });
+                });
+            }
+            if (includeMedia) {
+                const audioTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Audio && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.audioTaskId);
+                audioTargets.forEach((node) => {
+                    if (pollingAudioNodeIdsRef.current.has(node.id) || !node.metadata?.audioTaskId) return;
+                    pollingAudioNodeIdsRef.current.add(node.id);
+                    void pollCanvasAudioTaskStatus(node.metadata.audioTaskId)
+                        .then((task) => {
+                            setNodes((prev) => applyCanvasAudioTaskUpdate(prev, node.id, task, node.metadata?.startedAt || Date.now()));
+                        })
+                        .catch(() => undefined)
+                        .finally(() => {
+                            pollingAudioNodeIdsRef.current.delete(node.id);
+                        });
+                });
+            }
         };
-        pollCanvasTasks();
-        const timer = window.setInterval(pollCanvasTasks, VIDEO_POLL_INTERVAL_MS);
-        return () => window.clearInterval(timer);
+        pollCanvasTasks(true, true);
+        const videoTimer = window.setInterval(() => pollCanvasTasks(false, true), VIDEO_POLL_INTERVAL_MS);
+        const imageTimer = window.setInterval(() => pollCanvasTasks(true, false), IMAGE_POLL_INTERVAL_MS);
+        return () => {
+            window.clearInterval(videoTimer);
+            window.clearInterval(imageTimer);
+        };
     }, [effectiveConfig, isAiConfigReady, projectLoaded]);
 
     useEffect(() => {

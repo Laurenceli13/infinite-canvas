@@ -28,6 +28,8 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const isLoginPage = pathname === "/login" || pathname === "/admin/login";
     const adminRemoteTokenRef = useRef("");
+    const studioIdentity = `${user?.id || ""}:${user?.role || ""}`;
+    const studioCatalogRequestRef = useRef(0);
 
     useEffect(() => {
         if (!isStudioManagedHost()) return;
@@ -41,11 +43,13 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!isStudioManagedHost()) return;
-        let cancelled = false;
+        const requestId = ++studioCatalogRequestRef.current;
         const bootstrap = async () => {
             try {
-                const [studioUser, models] = await Promise.all([studioSelf(), fetchStudioCatalog()]);
-                if (cancelled) return;
+                // Load the session first so a login that happens after the
+                // initial shell mount gets a fresh, role-aware catalog too.
+                const studioUser = await studioSelf();
+                if (requestId !== studioCatalogRequestRef.current) return;
                 useStudioSessionStore.getState().setUser(studioUser);
                 useStudioSessionStore.getState().setReady(true);
                 setSession("studio-session", {
@@ -58,18 +62,24 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                     createdAt: "",
                     updatedAt: "",
                 });
-                const patch = catalogToConfigPatch(useConfigStore.getState().config, models);
-                Object.entries(patch).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+                try {
+                    const models = await fetchStudioCatalog();
+                    if (requestId !== studioCatalogRequestRef.current) return;
+                    const patch = catalogToConfigPatch(useConfigStore.getState().config, models);
+                    Object.entries(patch).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+                } catch {
+                    // Keep the authenticated session and any last-known model
+                    // list when the catalog request is temporarily unavailable.
+                }
             } catch {
-                if (!cancelled) {
+                if (requestId === studioCatalogRequestRef.current) {
                     useStudioSessionStore.getState().setReady(true);
                     clearSession();
                 }
             }
         };
         void bootstrap();
-        return () => { cancelled = true; };
-    }, [clearSession, setSession, updateConfig]);
+    }, [clearSession, setSession, studioIdentity, updateConfig]);
 
     useEffect(() => {
         if (isStudioManagedHost()) return;

@@ -85,6 +85,8 @@ export type CanvasImageTask = {
 };
 export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string };
 
+export const IMAGE_POLL_INTERVAL_MS = 1000;
+
 type ParsedImageResponse = {
     images: GeneratedImage[];
     responseBody: string;
@@ -1112,7 +1114,7 @@ async function createStudioCanvasImageTask(request: RequestInit, isEdit: boolean
 }
 
 async function pollStudioCanvasImageTask(taskId: string): Promise<CanvasImageTask> {
-    return fetchStudioCanvasImageTask(taskId, 10);
+    return fetchStudioCanvasImageTask(taskId, 25);
 }
 
 async function fetchStudioCanvasImageTask(taskId: string, waitSeconds: number): Promise<CanvasImageTask> {
