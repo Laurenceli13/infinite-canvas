@@ -140,6 +140,13 @@
 }
 
 @layer utilities {
+    .studio-admin-sider .ant-layout-sider-children {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+    }
+
     .ai-title-aurora {
         background: linear-gradient(90deg, #111827 0%, #111827 36%, #6b7280 54%, #111827 72%, #111827 100%);
         background-size: 220% 100%;
