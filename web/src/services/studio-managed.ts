@@ -51,15 +51,20 @@ export type StudioConnectionTestResult = {
 export type StudioUsage = {
     id: number;
     source: string;
+    user_id?: string;
     username?: string;
+    email?: string;
+    provider_id?: number;
     provider_name?: string;
     model: string;
     capability: string;
     unit_count?: number;
     credits: number;
+    balance_delta?: number;
     elapsed_ms?: number;
     status: string;
     error?: string;
+    request_path?: string;
     created_at: number;
 };
 
@@ -105,6 +110,39 @@ export type StudioPricingSettings = {
     sourceBalanceUnitsPerDollar: number;
     massmoreSourceBalanceUnitsPerDollar: number;
     mtlineSourceBalanceUnitsPerDollar: number;
+};
+
+export type StudioStorageProvider = {
+    id: string;
+    name: string;
+    type: "s3" | "webdav";
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    publicBaseUrl: string;
+    pathPrefix: string;
+    username: string;
+    password: string;
+    weight: number;
+    enabled: boolean;
+};
+
+export type StudioStorageSettings = {
+    mode: "local_indexeddb" | "server_sqlite_s3";
+    allowUserProvider: boolean;
+    allowUserGlobalProvider: boolean;
+    providers: StudioStorageProvider[];
+    roundRobinCursor: number;
+};
+
+export type StudioStoredFile = {
+    id: string;
+    url: string;
+    storageKey: string;
+    bytes: number;
+    mimeType: string;
 };
 
 type Envelope<T> = T & { success?: boolean; message?: string };
@@ -224,7 +262,12 @@ export async function resetStudioUserConcurrency(source: string, userId: string)
     await axios.delete(studioApi(`/admin/concurrency/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`));
 }
 
-export async function fetchStudioUsage(params?: { status?: string }) {
+export async function fetchStudioUsage(params?: { status?: string; limit?: number }) {
+    const response = await axios.get<Envelope<{ usage: StudioUsage[] }>>(studioApi("/usage"), { params });
+    return response.data.usage || [];
+}
+
+export async function fetchStudioAdminUsage(params?: { status?: string; limit?: number }) {
     const response = await axios.get<Envelope<{ usage: StudioUsage[] }>>(studioApi("/admin/usage"), { params });
     return response.data.usage || [];
 }
@@ -255,6 +298,46 @@ export async function fetchStudioPricingSettings() {
 
 export async function updateStudioPricingSettings(payload: Partial<StudioPricingSettings>) {
     await axios.patch(studioApi("/admin/settings"), payload);
+}
+
+export async function fetchStudioStorageConfig() {
+    const response = await axios.get<Envelope<{ storage: StudioStorageSettings }>>(studioApi("/storage/config"));
+    return response.data.storage;
+}
+
+export async function fetchStudioStorageSettings() {
+    const response = await axios.get<Envelope<{ storage: StudioStorageSettings }>>(studioApi("/admin/storage-settings"));
+    return response.data.storage;
+}
+
+export async function updateStudioStorageSettings(storage: StudioStorageSettings) {
+    const response = await axios.patch<Envelope<{ storage: StudioStorageSettings }>>(studioApi("/admin/storage-settings"), { storage });
+    return response.data.storage;
+}
+
+export function studioStoredFileUrl(id: string) {
+    return studioApi(`/files/${encodeURIComponent(id)}/content`);
+}
+
+export async function uploadStudioStoredFile(blob: Blob, filename: string, provider?: Record<string, unknown>) {
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    if (provider) formData.append("provider", JSON.stringify(provider));
+    const response = await fetch(studioApi("/files"), { method: "POST", body: formData, credentials: "same-origin" });
+    const payload = await response.json().catch(() => null) as Envelope<{ file?: StudioStoredFile }> | null;
+    if (!response.ok || !payload?.success || !payload.file) throw new Error(payload?.message || "Studio 存储上传失败");
+    return payload.file;
+}
+
+export async function deleteStudioStoredFile(id: string, provider?: Record<string, unknown>) {
+    const response = await fetch(studioApi(`/files/${encodeURIComponent(id)}`), {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: provider ? { "Content-Type": "application/json" } : undefined,
+        body: provider ? JSON.stringify({ provider }) : undefined,
+    });
+    const payload = await response.json().catch(() => null) as Envelope<Record<string, never>> | null;
+    if (!response.ok || !payload?.success) throw new Error(payload?.message || "Studio 存储删除失败");
 }
 
 export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): Partial<AiConfig> {

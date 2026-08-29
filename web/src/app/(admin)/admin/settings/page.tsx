@@ -4,12 +4,14 @@ import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutl
 import { json } from "@codemirror/lang-json";
 import { App, Button, Card, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -54,6 +56,15 @@ type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
 
 export default function AdminSettingsPage() {
+    const router = useRouter();
+    const studioHost = isStudioManagedHost();
+    useEffect(() => {
+        if (studioHost) router.replace("/admin/studio?tab=pricing");
+    }, [router, studioHost]);
+    return studioHost ? <main className="p-6"><Typography.Text type="secondary">Studio 域名的渠道、模型、积分、轮询、并发和存储配置已迁移到 Studio 管理后台。</Typography.Text></main> : <AdminSettingsContent />;
+}
+
+function AdminSettingsContent() {
     const token = useUserStore((state) => state.token);
     const { message } = App.useApp();
     const [form] = Form.useForm<AdminSettings>();

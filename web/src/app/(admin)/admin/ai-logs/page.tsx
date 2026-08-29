@@ -5,6 +5,7 @@ import { App, Button, Card, Flex, Form, Input, InputNumber, Modal, Space, Switch
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { deleteAdminAICallLogs, fetchAdminAICallLogs, fetchAdminSettings, saveAdminSettings, type AdminAICallLog } from "@/services/api/admin";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 
 export default function AdminAICallLogsPage() {
@@ -25,6 +26,9 @@ function AdminAICallLogsContent() {
     const [detail, setDetail] = useState<{ title: string; value: string } | null>(null);
     const [localDirectReportEnabled, setLocalDirectReportEnabled] = useState(false);
     const [savingLocalDirectReport, setSavingLocalDirectReport] = useState(false);
+    const [studioHost, setStudioHost] = useState(false);
+
+    useEffect(() => setStudioHost(isStudioManagedHost()), []);
 
     const loadLogs = async () => {
         if (!token) return;
@@ -45,11 +49,11 @@ function AdminAICallLogsContent() {
     }, [token, page, pageSize]);
 
     useEffect(() => {
-        if (!token) return;
+        if (!token || studioHost) return;
         fetchAdminSettings(token)
             .then((settings) => setLocalDirectReportEnabled(settings.private.aiLog?.localDirectReportEnabled === true))
             .catch(() => undefined);
-    }, [token]);
+    }, [studioHost, token]);
 
     const clearLogs = async () => {
         if (!token) return;
@@ -141,22 +145,22 @@ function AdminAICallLogsContent() {
                             <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(""); setPage(1); void loadLogs(); }}>
                                 重置
                             </Button>
-                            <div className="flex h-8 items-center gap-2 rounded-md border border-stone-200 px-3 dark:border-stone-800">
+                            {!studioHost ? <div className="flex h-8 items-center gap-2 rounded-md border border-stone-200 px-3 dark:border-stone-800">
                                 <Typography.Text className="whitespace-nowrap text-sm">本地直连日志</Typography.Text>
                                 <Switch size="small" checked={localDirectReportEnabled} loading={savingLocalDirectReport} onChange={(checked) => void updateLocalDirectReport(checked)} />
-                            </div>
-                            <div className="flex h-8 items-center gap-2">
+                            </div> : null}
+                            {!studioHost ? <div className="flex h-8 items-center gap-2">
                                 <Typography.Text className="whitespace-nowrap text-sm">清理超过</Typography.Text>
                                 <InputNumber min={1} value={clearDays} className="!w-24" onChange={(value) => setClearDays(Number(value) || 7)} />
                                 <Typography.Text type="secondary" className="shrink-0">天前</Typography.Text>
-                            </div>
-                            <Button danger icon={<DeleteOutlined />} loading={clearing} onClick={() => void clearLogs()} className="ml-0 lg:ml-auto">
+                            </div> : null}
+                            {!studioHost ? <Button danger icon={<DeleteOutlined />} loading={clearing} onClick={() => void clearLogs()} className="ml-0 lg:ml-auto">
                                 清理旧日志
-                            </Button>
+                            </Button> : null}
                         </div>
                     </Form>
                 </Card>
-                <Card variant="borderless" title={<span>AI 调用日志 <Tag>{total} 条</Tag></span>}>
+                <Card variant="borderless" title={<span>{studioHost ? "Studio 使用记录" : "AI 调用日志"} <Tag>{total} 条</Tag></span>}>
                     <Table
                         rowKey="id"
                         size="small"

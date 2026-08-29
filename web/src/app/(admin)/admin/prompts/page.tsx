@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import type { Prompt } from "@/services/api/prompts";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useAdminPrompts } from "./use-admin-prompts";
 
 export default function AdminPromptsPage() {
@@ -44,6 +45,7 @@ export default function AdminPromptsPage() {
     const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>([]);
     const [isBatchDeleteOpen, setIsBatchDeleteOpen] = useState(false);
     const [isSyncOpen, setIsSyncOpen] = useState(false);
+    const [studioHost, setStudioHost] = useState(false);
     const defaultCategory = categories[0]?.category || "";
     const categoryName = (category: string) => categories.find((item) => item.category === category)?.name || category;
     const categoryOptions = [{ label: "全部分类", value: "" }, ...categories.map((item) => ({ label: item.name, value: item.category }))];
@@ -54,6 +56,7 @@ export default function AdminPromptsPage() {
     }, [editingPrompt, form]);
 
     useEffect(() => setKeywordText(keyword), [keyword]);
+    useEffect(() => setStudioHost(isStudioManagedHost()), []);
 
     const savePrompt = async () => {
         const value = await form.validateFields();
@@ -110,7 +113,7 @@ export default function AdminPromptsPage() {
                 </Space>
             ),
         },
-        {
+        ...(studioHost ? [] : [{
             title: "操作",
             key: "actions",
             width: 112,
@@ -128,12 +131,13 @@ export default function AdminPromptsPage() {
                     </Tooltip>
                 </Space>
             ),
-        },
+        } as ProColumns<Prompt>]),
     ];
 
     return (
         <main style={{ padding: 24 }}>
             <Flex vertical gap={16}>
+                {studioHost ? <Typography.Text type="secondary">Studio 域名展示官方提示词库内容；维护、同步和删除请在原官方后台执行。</Typography.Text> : null}
                 <Card variant="borderless">
                     <Form layout="vertical">
                         <Row gutter={16} align="bottom">
@@ -188,8 +192,8 @@ export default function AdminPromptsPage() {
                         </Space>
                     }
                     options={{ density: true, setting: true, reload: () => void refreshPrompts() }}
-                    rowSelection={{ selectedRowKeys: selectedPromptIds, onChange: (keys) => setSelectedPromptIds(keys.map(String)) }}
-                    toolBarRender={() => [
+                    rowSelection={studioHost ? undefined : { selectedRowKeys: selectedPromptIds, onChange: (keys) => setSelectedPromptIds(keys.map(String)) }}
+                    toolBarRender={() => studioHost ? [] : [
                         <Button key="batch-delete" danger icon={<DeleteOutlined />} disabled={!selectedPromptIds.length} onClick={() => setIsBatchDeleteOpen(true)}>
                             批量删除{selectedPromptIds.length ? ` ${selectedPromptIds.length}` : ""}
                         </Button>,

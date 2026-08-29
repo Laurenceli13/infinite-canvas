@@ -13,10 +13,11 @@ import {
     discoverStudioProviderModels,
     fetchStudioAdminModels,
     fetchStudioAccounts,
+    fetchStudioAdminUsage,
     fetchStudioConcurrency,
     fetchStudioPricingSettings,
     fetchStudioProviders,
-    fetchStudioUsage,
+    fetchStudioStorageSettings,
     fetchStudioWorkflowUsers,
     fetchStudioWorkflows,
     isStudioManagedHost,
@@ -24,6 +25,7 @@ import {
     testStudioProvider,
     updateStudioConcurrencySettings,
     updateStudioPricingSettings,
+    updateStudioStorageSettings,
     updateStudioModel,
     updateStudioModelFailover,
     updateStudioProvider,
@@ -34,6 +36,8 @@ import {
     type StudioModel,
     type StudioPricingSettings,
     type StudioProvider,
+    type StudioStorageProvider,
+    type StudioStorageSettings,
     type StudioUsage,
     type StudioWorkflow,
 } from "@/services/studio-managed";
@@ -63,6 +67,7 @@ function StudioAdminContent() {
     const [workflows, setWorkflows] = useState<StudioWorkflow[]>([]);
     const [workflowUsers, setWorkflowUsers] = useState<Array<{ value: string; label: string }>>([]);
     const [pricing, setPricing] = useState<StudioPricingSettings | null>(null);
+    const [storage, setStorage] = useState<StudioStorageSettings | null>(null);
     const [concurrencyUsers, setConcurrencyUsers] = useState<NonNullable<Awaited<ReturnType<typeof fetchStudioConcurrency>>["users"]>>([]);
     const [loading, setLoading] = useState(true);
     const [providerForm] = Form.useForm<ProviderFormValues>();
@@ -81,8 +86,8 @@ function StudioAdminContent() {
     const refresh = async () => {
         setLoading(true);
         try {
-            const [nextProviders, nextModels, nextUsage, concurrency, nextWorkflows, nextWorkflowUsers, nextAccounts, nextPricing] = await Promise.all([
-                fetchStudioProviders(), fetchStudioAdminModels(), fetchStudioUsage(), fetchStudioConcurrency(), fetchStudioWorkflows(), fetchStudioWorkflowUsers(), fetchStudioAccounts(), fetchStudioPricingSettings(),
+            const [nextProviders, nextModels, nextUsage, concurrency, nextWorkflows, nextWorkflowUsers, nextAccounts, nextPricing, nextStorage] = await Promise.all([
+                fetchStudioProviders(), fetchStudioAdminModels(), fetchStudioAdminUsage(), fetchStudioConcurrency(), fetchStudioWorkflows(), fetchStudioWorkflowUsers(), fetchStudioAccounts(), fetchStudioPricingSettings(), fetchStudioStorageSettings(),
             ]);
             setProviders(nextProviders);
             setModels(nextModels);
@@ -96,6 +101,7 @@ function StudioAdminContent() {
             setWorkflowUsers(nextWorkflowUsers);
             setAccounts(nextAccounts);
             setPricing(nextPricing);
+            setStorage(nextStorage);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "加载 Studio 管理数据失败");
         } finally {
@@ -282,8 +288,103 @@ function StudioAdminContent() {
                         label: "积分设置",
                         children: pricing ? <Card size="small" title="账本换算规则"><Form layout="vertical" initialValues={pricing} onFinish={(values: StudioPricingSettings) => void updateStudioPricingSettings(values).then(() => { message.success("积分设置已保存"); return refresh(); }).catch((error: unknown) => message.error(error instanceof Error ? error.message : "保存失败"))}><div className="grid gap-4 md:grid-cols-2"><Form.Item name="pointsPerDollar" label="每 1 美元对应 Studio 积分" rules={[{ required: true }]}><InputNumber min={0.0001} className="!w-full" /></Form.Item><Form.Item name="sourceBalanceUnitsPerDollar" label="通用账本单位/美元" rules={[{ required: true }]}><InputNumber min={0.0001} className="!w-full" /></Form.Item><Form.Item name="massmoreSourceBalanceUnitsPerDollar" label="MassMore 账本单位/美元" rules={[{ required: true }]}><InputNumber min={0.0001} className="!w-full" /></Form.Item><Form.Item name="mtlineSourceBalanceUnitsPerDollar" label="Mtline 账本单位/美元" rules={[{ required: true }]}><InputNumber min={0.0001} className="!w-full" /></Form.Item></div><Typography.Paragraph type="secondary">模型基础积分和图片/视频质量、分辨率等附加规则仍在“模型目录”的模型编辑配置中维护，前端显示与后端扣费使用同一套规则。</Typography.Paragraph><Button type="primary" htmlType="submit">保存积分设置</Button></Form></Card> : <Typography.Text type="secondary">正在加载积分设置...</Typography.Text>,
                     },
+                    {
+                        key: "storage",
+                        label: "存储桶设置",
+                        children: storage ? <StudioStoragePanel value={storage} onSaved={setStorage} /> : <Typography.Text type="secondary">正在加载存储设置...</Typography.Text>,
+                    },
                 ]}
             />
         </div>
+    );
+}
+
+function StudioStoragePanel({ value, onSaved }: { value: StudioStorageSettings; onSaved: (value: StudioStorageSettings) => void }) {
+    const { message } = App.useApp();
+    const [draft, setDraft] = useState(value);
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => setDraft(value), [value]);
+
+    const patchProvider = (index: number, patch: Partial<StudioStorageProvider>) => {
+        setDraft((current) => ({ ...current, providers: current.providers.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }));
+    };
+
+    const addProvider = (type: StudioStorageProvider["type"]) => {
+        const id = `storage-${Date.now()}`;
+        setDraft((current) => ({
+            ...current,
+            providers: [...current.providers, {
+                id,
+                name: type === "s3" ? "新 S3/R2" : "新 WebDAV",
+                type,
+                endpoint: "",
+                region: type === "s3" ? "auto" : "",
+                bucket: "",
+                accessKeyId: "",
+                secretAccessKey: "",
+                publicBaseUrl: "",
+                pathPrefix: "canvas",
+                username: "",
+                password: "",
+                weight: 1,
+                enabled: true,
+            }],
+        }));
+    };
+
+    const save = async () => {
+        setSaving(true);
+        try {
+            const saved = await updateStudioStorageSettings(draft);
+            setDraft(saved);
+            onSaved(saved);
+            message.success("存储桶设置已保存");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "存储桶设置保存失败");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Card size="small" title="官方存储设置" extra={<Button type="primary" loading={saving} onClick={() => void save()}>保存设置</Button>}>
+            <Typography.Paragraph type="secondary">全局对象存储由 Studio 服务端使用，用户端只收到受控的同源文件地址。启用用户自定义存储后，用户自己的 S3/R2 密钥只用于请求，不会写入 Studio 数据库。</Typography.Paragraph>
+            <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                    <Typography.Text strong>全局存储模式</Typography.Text>
+                    <Select className="mt-2 w-full" value={draft.mode} options={[{ value: "local_indexeddb", label: "浏览器本地存储" }, { value: "server_sqlite_s3", label: "服务端对象存储（S3/R2/WebDAV）" }]} onChange={(mode: StudioStorageSettings["mode"]) => setDraft((current) => ({ ...current, mode }))} />
+                </div>
+                <div className="space-y-3 rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-3"><Typography.Text>允许用户配置自己的 S3/R2</Typography.Text><Switch checked={draft.allowUserProvider} onChange={(allowUserProvider) => setDraft((current) => ({ ...current, allowUserProvider }))} /></div>
+                    <div className="flex items-center justify-between gap-3"><Typography.Text>允许普通用户使用全局存储</Typography.Text><Switch checked={draft.allowUserGlobalProvider} onChange={(allowUserGlobalProvider) => setDraft((current) => ({ ...current, allowUserGlobalProvider }))} /></div>
+                </div>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2"><Button onClick={() => addProvider("s3")}>新增 S3/R2 配置</Button><Button onClick={() => addProvider("webdav")}>新增 WebDAV 配置</Button></div>
+            <div className="mt-4 space-y-4">
+                {draft.providers.map((provider, index) => (
+                    <Card key={provider.id} size="small" title={provider.name || `${provider.type.toUpperCase()} 配置`} extra={<Space><Switch size="small" checked={provider.enabled} onChange={(enabled) => patchProvider(index, { enabled })} /><Button danger type="link" size="small" onClick={() => setDraft((current) => ({ ...current, providers: current.providers.filter((_, itemIndex) => itemIndex !== index) }))}>删除</Button></Space>}>
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            <Input value={provider.name} placeholder="配置名称" onChange={(event) => patchProvider(index, { name: event.target.value })} />
+                            <Select value={provider.type} options={[{ value: "s3", label: "S3/R2" }, { value: "webdav", label: "WebDAV" }]} onChange={(type: StudioStorageProvider["type"]) => patchProvider(index, { type })} />
+                            <Input value={provider.endpoint} placeholder={provider.type === "s3" ? "S3/R2 Endpoint" : "WebDAV 地址"} onChange={(event) => patchProvider(index, { endpoint: event.target.value })} />
+                            {provider.type === "s3" ? <>
+                                <Input value={provider.region} placeholder="Region，例如 auto" onChange={(event) => patchProvider(index, { region: event.target.value })} />
+                                <Input value={provider.bucket} placeholder="Bucket 名称" onChange={(event) => patchProvider(index, { bucket: event.target.value })} />
+                                <Input value={provider.accessKeyId} placeholder="Access Key ID（留空保持不变）" onChange={(event) => patchProvider(index, { accessKeyId: event.target.value })} />
+                                <Input.Password value={provider.secretAccessKey} placeholder="Secret Access Key（留空保持不变）" onChange={(event) => patchProvider(index, { secretAccessKey: event.target.value })} />
+                                <Input value={provider.publicBaseUrl} placeholder="公开访问地址（可选）" onChange={(event) => patchProvider(index, { publicBaseUrl: event.target.value })} />
+                            </> : <>
+                                <Input value={provider.pathPrefix} placeholder="远程目录" onChange={(event) => patchProvider(index, { pathPrefix: event.target.value })} />
+                                <Input value={provider.username} placeholder="用户名" onChange={(event) => patchProvider(index, { username: event.target.value })} />
+                                <Input.Password value={provider.password} placeholder="密码（留空保持不变）" onChange={(event) => patchProvider(index, { password: event.target.value })} />
+                            </>}
+                            <InputNumber className="!w-full" min={1} max={100} value={provider.weight} addonBefore="权重" onChange={(weight) => patchProvider(index, { weight: Number(weight || 1) })} />
+                        </div>
+                    </Card>
+                ))}
+                {!draft.providers.length ? <Typography.Text type="secondary">尚未配置全局存储桶。保持本地模式即可使用浏览器本地存储。</Typography.Text> : null}
+            </div>
+        </Card>
     );
 }

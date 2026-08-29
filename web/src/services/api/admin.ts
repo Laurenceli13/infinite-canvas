@@ -1,5 +1,77 @@
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
+import {
+    fetchStudioAccounts,
+    fetchStudioAdminUsage,
+    isStudioManagedHost,
+    type StudioAccount,
+    type StudioUsage,
+} from "@/services/studio-managed";
+
+function isStudioAdminSession(token: string) {
+    return isStudioManagedHost() && token === "studio-session";
+}
+
+function studioTimestamp(value: number | undefined) {
+    return value ? new Date(value * 1000).toISOString() : "";
+}
+
+function studioAccountToAdminUser(item: StudioAccount): AdminUser {
+    return {
+        id: `${item.source}:${item.userId}`,
+        username: item.username,
+        email: item.email,
+        displayName: item.username,
+        avatarUrl: "",
+        role: "user",
+        credits: item.points,
+        affCode: "",
+        affCount: 0,
+        inviterId: "",
+        linuxDoId: "",
+        status: "active",
+        lastLoginAt: studioTimestamp(item.updatedAt),
+        createdAt: "",
+        updatedAt: studioTimestamp(item.updatedAt),
+    };
+}
+
+function studioUsageToCreditLog(item: StudioUsage): AdminCreditLog {
+    const isRefund = item.status === "refunded" || item.status === "refund_failed";
+    return {
+        id: String(item.id),
+        userId: `${item.source}:${item.user_id || item.username || "-"}`,
+        userDisplayName: item.username || "",
+        type: isRefund ? "ai_refund" : "ai_consume",
+        amount: isRefund ? Number(item.credits || 0) : -Number(item.credits || 0),
+        balance: 0,
+        relatedId: "",
+        remark: [item.provider_name, item.model, item.capability].filter(Boolean).join(" / "),
+        extra: item.error || item.status || "",
+        createdAt: studioTimestamp(item.created_at),
+    };
+}
+
+function studioUsageToAICallLog(item: StudioUsage): AdminAICallLog {
+    const success = item.status === "success" || item.status === "succeeded" || item.status === "charged";
+    return {
+        id: String(item.id),
+        userId: item.user_id || `${item.source}:${item.username || "-"}`,
+        userDisplayName: item.username || "",
+        endpoint: item.request_path || "-",
+        method: "POST",
+        model: item.model,
+        channelId: item.provider_name || "",
+        channelName: item.provider_name || "",
+        status: success ? 200 : item.status === "running" ? 102 : 502,
+        durationMs: Number(item.elapsed_ms || 0),
+        credits: Number(item.credits || 0),
+        requestBody: "",
+        responseBody: item.error || "",
+        error: item.error || "",
+        createdAt: studioTimestamp(item.created_at),
+    };
+}
 
 export type AdminPromptCategory = {
     category: string;
@@ -58,6 +130,14 @@ export type AdminUserQuery = {
 };
 
 export async function fetchAdminUsers(token: string, query: AdminUserQuery = {}) {
+    if (isStudioAdminSession(token)) {
+        const users = (await fetchStudioAccounts()).map(studioAccountToAdminUser);
+        const keyword = String(query.keyword || "").trim().toLowerCase();
+        const filtered = keyword ? users.filter((item) => [item.username, item.email, item.displayName, item.id].some((value) => value.toLowerCase().includes(keyword))) : users;
+        const page = Math.max(1, Number(query.page || 1));
+        const pageSize = Math.max(1, Number(query.pageSize || 10));
+        return { items: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length };
+    }
     return apiGet<AdminUserListResponse>("/api/admin/users", compactApiParams(query), token);
 }
 
@@ -74,6 +154,14 @@ export async function deleteAdminUser(token: string, id: string) {
 }
 
 export async function fetchAdminCreditLogs(token: string, query: AdminUserQuery = {}) {
+    if (isStudioAdminSession(token)) {
+        const logs = (await fetchStudioAdminUsage({ limit: 500 })).map(studioUsageToCreditLog);
+        const keyword = String(query.keyword || "").trim().toLowerCase();
+        const filtered = keyword ? logs.filter((item) => [item.userId, item.userDisplayName, item.type, item.remark, item.relatedId].some((value) => value.toLowerCase().includes(keyword))) : logs;
+        const page = Math.max(1, Number(query.page || 1));
+        const pageSize = Math.max(1, Number(query.pageSize || 10));
+        return { items: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length };
+    }
     return apiGet<AdminCreditLogListResponse>("/api/admin/credit-logs", compactApiParams(query), token);
 }
 
@@ -86,6 +174,10 @@ export async function deleteAdminCreditLog(token: string, id: string) {
 }
 
 export async function fetchAdminPromptCategories(token: string) {
+    if (isStudioAdminSession(token)) {
+        const prompts = await apiGet<PromptListResponse>("/api/prompts");
+        return (prompts.categories || []).map((category) => ({ category, name: category, description: "", file: "", githubUrl: "", remote: false }));
+    }
     return apiGet<AdminPromptCategory[]>("/api/admin/prompt-categories", undefined, token);
 }
 
@@ -126,6 +218,9 @@ export type AdminAssetListResponse = {
 };
 
 export async function fetchAdminPrompts(token: string, query: AdminPromptQuery = {}) {
+    if (isStudioAdminSession(token)) {
+        return apiGet<PromptListResponse>("/api/prompts", compactApiParams(query));
+    }
     return apiGet<PromptListResponse>("/api/admin/prompts", compactApiParams(query), token);
 }
 
@@ -150,6 +245,9 @@ export type AdminAssetQuery = {
 };
 
 export async function fetchAdminAssets(token: string, query: AdminAssetQuery = {}) {
+    if (isStudioAdminSession(token)) {
+        return apiGet<AdminAssetListResponse>("/api/assets", compactApiParams(query));
+    }
     return apiGet<AdminAssetListResponse>("/api/admin/assets", compactApiParams(query), token);
 }
 
@@ -304,6 +402,14 @@ export type AdminAICallLogListResponse = {
 };
 
 export async function fetchAdminAICallLogs(token: string, query: AdminUserQuery = {}) {
+    if (isStudioAdminSession(token)) {
+        const logs = (await fetchStudioAdminUsage({ limit: 500 })).map(studioUsageToAICallLog);
+        const keyword = String(query.keyword || "").trim().toLowerCase();
+        const filtered = keyword ? logs.filter((item) => [item.userId, item.userDisplayName, item.endpoint, item.model, item.channelName, item.error].some((value) => value.toLowerCase().includes(keyword))) : logs;
+        const page = Math.max(1, Number(query.page || 1));
+        const pageSize = Math.max(1, Number(query.pageSize || 20));
+        return { items: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length };
+    }
     return apiGet<AdminAICallLogListResponse>("/api/admin/ai-logs", compactApiParams(query), token);
 }
 

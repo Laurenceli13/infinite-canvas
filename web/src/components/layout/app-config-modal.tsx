@@ -87,7 +87,7 @@ export function AppConfigModal() {
     useEffect(() => {
         setUserStorage(loadUserS3StorageProvider() || defaultUserStorageProvider());
         setUserWebDAVStorage(loadUserWebDAVStorageProvider() || defaultUserWebDAVStorageProvider());
-        if (!isConfigOpen || !token) return;
+        if (!isConfigOpen || !token || studioHost) return;
         let canceled = false;
         void fetchUserConfig(token)
             .then((payload) => {
@@ -117,7 +117,7 @@ export function AppConfigModal() {
         return () => {
             canceled = true;
         };
-    }, [isConfigOpen, token, updateConfig]);
+    }, [isConfigOpen, studioHost, token, updateConfig]);
 
     useEffect(() => {
         if (!isConfigOpen) return;

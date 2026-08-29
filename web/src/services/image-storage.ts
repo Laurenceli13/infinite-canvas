@@ -7,6 +7,7 @@ import { readImageMeta } from "@/lib/image-utils";
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
+import { deleteStudioStoredFile, fetchStudioStorageConfig, isStudioManagedHost, studioStoredFileUrl, uploadStudioStoredFile } from "@/services/studio-managed";
 
 export type UploadedImage = {
     url: string;
@@ -159,6 +160,10 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
     const config = await loadStorageConfig();
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     if (!canUseGlobalStorage(config) && !userProvider) throw new Error("服务端对象存储未启用");
+    if (isStudioManagedHost() && userProvider?.type !== "webdav") {
+        const uploaded = await uploadStudioStoredFile(blob, filename || `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider ? toProviderPayload(userProvider) : undefined);
+        return { ...uploaded, width: 0, height: 0, mimeType: uploaded.mimeType || blob.type || "image/png" };
+    }
     const token = useUserStore.getState().token;
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVImageDirect(blob, filename || `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider);
@@ -215,7 +220,7 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
                 if (!useUserStore.getState().token || !direct.isWebDAVDirectUnavailable(error)) throw error;
             }
         }
-        const url = info.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        const url = info.publicUrl || (isStudioManagedHost() ? studioStoredFileUrl(id) : `/api/files/${encodeURIComponent(id)}/content`);
         serverUrls.set(id, url);
         return url;
     }
@@ -238,6 +243,11 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     const canUseGlobalProvider = config ? canUseGlobalStorage(config) : false;
     const useServerStorage = canUseGlobalProvider || Boolean(userProvider);
     if (!config || !useServerStorage) return null;
+    if (isStudioManagedHost() && userProvider?.type !== "webdav") {
+        const uploaded = await uploadStudioStoredFile(blob, `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider ? toProviderPayload(userProvider) : undefined);
+        const meta = await readImageMeta(URL.createObjectURL(blob));
+        return { ...uploaded, url: uploaded.url || studioStoredFileUrl(uploaded.id), width: meta.width, height: meta.height, mimeType: uploaded.mimeType || blob.type || "image/png" };
+    }
     const token = useUserStore.getState().token;
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVImageDirect(blob, `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider);
@@ -285,7 +295,7 @@ async function cacheAnonymousImage(uploaded: UploadedImage, blob: Blob) {
 }
 
 export async function loadStorageConfig() {
-    storageConfigPromise ||= apiGet<StorageConfig>("/api/storage/config");
+    storageConfigPromise ||= isStudioManagedHost() ? fetchStudioStorageConfig() : apiGet<StorageConfig>("/api/storage/config");
     return storageConfigPromise;
 }
 
@@ -498,6 +508,10 @@ async function deleteServerImage(storageKey: string) {
             await store.removeItem(storageKey);
             return;
         }
+    }
+    if (isStudioManagedHost()) {
+        await deleteStudioStoredFile(id, provider ? toProviderPayload(provider) : undefined);
+        return;
     }
     if (!token) {
         if (!provider) return;

@@ -5,9 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { AppTopNav } from "@/components/layout/app-top-nav";
 import { fetchUserConfig } from "@/services/api/user-config";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 
-const protectedPrefixes = ["/asset-library"];
+const protectedPrefixes = ["/asset-library", "/usage"];
 
 export default function UserLayout({ children }: { children: ReactNode }) {
     const pathname = usePathname();
@@ -28,6 +29,8 @@ export default function UserLayout({ children }: { children: ReactNode }) {
             wasLoggedOutRef.current = true;
             return;
         }
+        // Studio sessions use the managed backend; do not call the retired Go user-config API.
+        if (isStudioManagedHost()) return;
         const syncCanvasAfterLogin = wasLoggedOutRef.current;
         const token = useUserStore.getState().token;
         if (!token) return;

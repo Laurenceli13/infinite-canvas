@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import type { AdminAsset } from "@/services/api/admin";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useAdminAssets } from "./use-admin-assets";
 
 type AssetFormValues = Partial<AdminAsset> & { tagText?: string };
@@ -29,6 +30,7 @@ export default function AdminAssetsPage() {
     const [editingAsset, setEditingAsset] = useState<Partial<AdminAsset> | null>(null);
     const [detailAsset, setDetailAsset] = useState<AdminAsset | null>(null);
     const [deletingAsset, setDeletingAsset] = useState<AdminAsset | null>(null);
+    const [studioHost, setStudioHost] = useState(false);
     const formType = Form.useWatch("type", form) || editingAsset?.type || "text";
     const tagOptions = tags.map((item) => ({ label: item, value: item }));
 
@@ -48,6 +50,7 @@ export default function AdminAssetsPage() {
     }, [editingAsset, form]);
 
     useEffect(() => setKeywordText(keyword), [keyword]);
+    useEffect(() => setStudioHost(isStudioManagedHost()), []);
 
     const saveAsset = async () => {
         const value = await form.validateFields();
@@ -106,7 +109,7 @@ export default function AdminAssetsPage() {
             width: 120,
             render: (_, item) => <Typography.Text type="secondary">{item.category || "未标注"}</Typography.Text>,
         },
-        {
+        ...(studioHost ? [] : [{
             title: "操作",
             key: "actions",
             width: 112,
@@ -124,12 +127,13 @@ export default function AdminAssetsPage() {
                     </Tooltip>
                 </Space>
             ),
-        },
+        } as ProColumns<AdminAsset>]),
     ];
 
     return (
         <main style={{ padding: 24 }}>
             <Flex vertical gap={16}>
+                {studioHost ? <Typography.Text type="secondary">Studio 域名展示官方素材库内容；新增、编辑和删除请在原官方后台执行。</Typography.Text> : null}
                 <Card variant="borderless">
                     <Form layout="vertical">
                         <Row gutter={16} align="bottom">
@@ -184,7 +188,7 @@ export default function AdminAssetsPage() {
                         </Space>
                     }
                     options={{ density: true, setting: true, reload: () => void refreshAssets() }}
-                    toolBarRender={() => [
+                    toolBarRender={() => studioHost ? [] : [
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingAsset({ type: "text", tags: [] })}>
                             新增
                         </Button>,

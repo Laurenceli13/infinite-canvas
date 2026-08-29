@@ -7,6 +7,7 @@ import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/servic
 import { apiGet } from "@/services/api/request";
 import { canUseGlobalStorage, getProxyUrl, loadUserStorageProvider, toProviderPayload, type StorageConfig, type UserWebDAVStorageProvider } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
+import { deleteStudioStoredFile, fetchStudioStorageConfig, isStudioManagedHost, studioStoredFileUrl, uploadStudioStoredFile } from "@/services/studio-managed";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
@@ -60,6 +61,11 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<Up
     const config = await loadStorageConfig().catch(() => null);
     const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
     if (!config || (!canUseGlobalStorage(config) && !userProvider)) throw new Error("服务端对象存储未启用");
+    if (isStudioManagedHost() && userProvider?.type !== "webdav") {
+        const uploaded = await uploadStudioStoredFile(blob, filename, userProvider ? toProviderPayload(userProvider) : undefined);
+        const meta = uploaded.mimeType?.startsWith("video/") ? await readVideoMeta(uploaded.url || studioStoredFileUrl(uploaded.id)) : {};
+        return { ...uploaded, url: uploaded.url || studioStoredFileUrl(uploaded.id), bytes: uploaded.bytes || blob.size, mimeType: uploaded.mimeType || blob.type || "application/octet-stream", ...meta };
+    }
     const token = useUserStore.getState().token;
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVMediaDirect(blob, filename, userProvider);
@@ -95,7 +101,7 @@ async function cacheAnonymousMedia(uploaded: UploadedFile, blob: Blob) {
 }
 
 async function loadStorageConfig() {
-    storageConfigPromise ||= apiGet<StorageConfig>("/api/storage/config");
+    storageConfigPromise ||= isStudioManagedHost() ? fetchStudioStorageConfig() : apiGet<StorageConfig>("/api/storage/config");
     return storageConfigPromise;
 }
 
@@ -138,7 +144,7 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
                 if (!useUserStore.getState().token || !direct.isWebDAVDirectUnavailable(error)) throw error;
             }
         }
-        const url = info.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        const url = info.publicUrl || (isStudioManagedHost() ? studioStoredFileUrl(id) : `/api/files/${encodeURIComponent(id)}/content`);
         return url;
     }
     return fallback;
@@ -170,6 +176,10 @@ async function deleteServerMedia(storageKey: string) {
             await store.removeItem(storageKey);
             return;
         }
+    }
+    if (isStudioManagedHost()) {
+        await deleteStudioStoredFile(id, provider ? toProviderPayload(provider) : undefined);
+        return;
     }
     if (!token) {
         if (!provider) return;

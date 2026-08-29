@@ -3,9 +3,10 @@
 import { AuditOutlined, FileTextOutlined, HomeOutlined, LogoutOutlined, PictureOutlined, SettingOutlined, TransactionOutlined, UserOutlined } from "@ant-design/icons";
 import { Button, Flex, Layout, Menu, Typography, theme } from "antd";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect } from "react";
+import { Suspense } from "react";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { adminLayoutStyle } from "@/lib/app-theme";
@@ -30,20 +31,40 @@ const studioMenus = [
     { key: "/admin/studio?tab=workflows", icon: <FileTextOutlined />, label: "默认工作流" },
     { key: "/admin/studio?tab=accounts", icon: <UserOutlined />, label: "用户与账本" },
     { key: "/admin/studio?tab=pricing", icon: <TransactionOutlined />, label: "积分设置" },
+    { key: "/admin/studio?tab=storage", icon: <SettingOutlined />, label: "存储桶设置" },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
+    return <Suspense fallback={null}><AdminLayoutContent>{children}</AdminLayoutContent></Suspense>;
+}
+
+function AdminLayoutContent({ children }: { children: ReactNode }) {
     const { token: antToken } = theme.useToken();
     const router = useRouter();
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
     const logout = useUserStore((state) => state.clearSession);
     const studioHost = isStudioManagedHost();
-    const menus = studioHost ? studioMenus : adminMenus;
+    const menus = studioHost ? [...adminMenus, ...studioMenus] : adminMenus;
     const activeKey = studioHost
-        ? "/admin/studio?tab=providers"
+        ? pathname.startsWith("/admin/studio")
+            ? `/admin/studio?tab=${searchParams.get("tab") || "providers"}`
+            : pathname.startsWith("/admin/settings")
+              ? "/admin/settings"
+              : pathname.startsWith("/admin/assets")
+                ? "/admin/assets"
+                : pathname.startsWith("/admin/prompts")
+                  ? "/admin/prompts"
+                  : pathname.startsWith("/admin/ai-logs")
+                    ? "/admin/ai-logs"
+                    : pathname.startsWith("/admin/credit-logs")
+                      ? "/admin/credit-logs"
+                      : pathname.startsWith("/admin/users")
+                        ? "/admin/users"
+                        : ""
         : pathname.startsWith("/admin/settings")
         ? "/admin/settings"
         : pathname.startsWith("/admin/assets")
@@ -57,7 +78,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
               : pathname.startsWith("/admin/users")
                 ? "/admin/users"
                 : "";
-    const pageTitle = studioHost ? "Studio 管理后台" : pathname.startsWith("/admin/settings") ? "系统设置" : pathname.startsWith("/admin/assets") ? "素材库管理" : pathname.startsWith("/admin/prompts") ? "提示词管理" : pathname.startsWith("/admin/ai-logs") ? "AI 日志" : pathname.startsWith("/admin/credit-logs") ? "算力点日志" : "用户管理";
+    const pageTitle = pathname.startsWith("/admin/studio") ? "Studio 管理后台" : pathname.startsWith("/admin/settings") ? "系统设置" : pathname.startsWith("/admin/assets") ? "素材库管理" : pathname.startsWith("/admin/prompts") ? "提示词管理" : pathname.startsWith("/admin/ai-logs") ? "AI 日志" : pathname.startsWith("/admin/credit-logs") ? "算力点日志" : "用户管理";
 
     useEffect(() => {
         if (!isReady) return;

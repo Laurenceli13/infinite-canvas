@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import { Avatar, Dropdown, Tooltip } from "antd";
-import { Keyboard, LogOut, Settings2 } from "lucide-react";
+import { History, Keyboard, LogOut, Settings2 } from "lucide-react";
 import type { ItemType } from "antd/es/menu/interface";
 import Link from "next/link";
 
@@ -53,6 +53,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const menuItems: ItemType[] = [
         { key: "user", disabled: true, label: <span className="font-medium text-current">{userName}</span> },
         ...(onOpenShortcuts ? [{ key: "shortcuts", icon: <Keyboard className="size-4" />, label: "快捷键", onClick: onOpenShortcuts }] : []),
+        ...(studioHost ? [{ key: "usage", icon: <History className="size-4" />, label: <Link href="/usage">我的使用记录</Link> }] : []),
         { type: "divider" },
         {
             key: "logout",

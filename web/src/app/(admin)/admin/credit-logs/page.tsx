@@ -7,6 +7,7 @@ import dayjs from "dayjs";
 import { useEffect, useState } from "react";
 
 import type { AdminCreditLog } from "@/services/api/admin";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useAdminCreditLogs } from "./use-admin-credit-logs";
 
 type CreditLogFormValues = Partial<AdminCreditLog>;
@@ -23,6 +24,9 @@ export default function AdminCreditLogsPage() {
     const [keywordText, setKeywordText] = useState(keyword);
     const [editingLog, setEditingLog] = useState<Partial<AdminCreditLog> | null>(null);
     const [deletingLog, setDeletingLog] = useState<AdminCreditLog | null>(null);
+    const [studioHost, setStudioHost] = useState(false);
+
+    useEffect(() => setStudioHost(isStudioManagedHost()), []);
 
     useEffect(() => setKeywordText(keyword), [keyword]);
 
@@ -72,7 +76,7 @@ export default function AdminCreditLogsPage() {
             width: 180,
             render: (_, item) => <Typography.Text type="secondary">{item.createdAt ? dayjs(item.createdAt).format("YYYY-MM-DD HH:mm:ss") : "-"}</Typography.Text>,
         },
-        {
+        ...(studioHost ? [] : [{
             title: "操作",
             key: "actions",
             width: 96,
@@ -87,12 +91,13 @@ export default function AdminCreditLogsPage() {
                     </Tooltip>
                 </Space>
             ),
-        },
+        } as ProColumns<AdminCreditLog>]),
     ];
 
     return (
         <main style={{ padding: 24 }}>
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                {studioHost ? <Typography.Text type="secondary">Studio 账本日志为 MassMore / Mtline 的消费与返还记录，只读展示，避免在 Studio 本地制造与上游不一致的余额。</Typography.Text> : null}
                 <Card variant="borderless">
                     <Form layout="vertical">
                         <Row gutter={16} align="bottom">
@@ -137,7 +142,7 @@ export default function AdminCreditLogsPage() {
                         </Space>
                     }
                     options={{ density: true, setting: true, reload: () => void refreshLogs() }}
-                    toolBarRender={() => [
+                    toolBarRender={() => studioHost ? [] : [
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingLog({ type: "admin_adjust", amount: 0, balance: 0 })}>
                             新增
                         </Button>,

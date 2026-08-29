@@ -7,6 +7,7 @@ import dayjs from "dayjs";
 import { useEffect, useState } from "react";
 
 import type { AdminUser } from "@/services/api/admin";
+import { isStudioManagedHost } from "@/services/studio-managed";
 import { useAdminUsers } from "./use-admin-users";
 
 type UserFormValues = Partial<AdminUser> & { password?: string };
@@ -27,6 +28,9 @@ export default function AdminUsersPage() {
     const [keywordText, setKeywordText] = useState(keyword);
     const [editingUser, setEditingUser] = useState<Partial<AdminUser> | null>(null);
     const [deletingUser, setDeletingUser] = useState<AdminUser | null>(null);
+    const [studioHost, setStudioHost] = useState(false);
+
+    useEffect(() => setStudioHost(isStudioManagedHost()), []);
 
     useEffect(() => setKeywordText(keyword), [keyword]);
 
@@ -90,13 +94,19 @@ export default function AdminUsersPage() {
             width: 140,
             render: (_, item) => <Typography.Text type="secondary">{item.linuxDoId || "-"}</Typography.Text>,
         },
+        ...(studioHost ? [{
+            title: "来源",
+            dataIndex: "id",
+            width: 120,
+            render: (_: unknown, item: AdminUser) => <Typography.Text type="secondary">{item.id.split(":", 1)[0] || "-"}</Typography.Text>,
+        } as ProColumns<AdminUser>] : []),
         {
             title: "最近登录",
             dataIndex: "lastLoginAt",
             width: 180,
             render: (_, item) => <Typography.Text type="secondary">{item.lastLoginAt ? dayjs(item.lastLoginAt).format("YYYY-MM-DD HH:mm:ss") : "-"}</Typography.Text>,
         },
-        {
+        ...(studioHost ? [] : [{
             title: "操作",
             key: "actions",
             width: 96,
@@ -111,12 +121,13 @@ export default function AdminUsersPage() {
                     </Tooltip>
                 </Space>
             ),
-        },
+        } as ProColumns<AdminUser>]),
     ];
 
     return (
         <main style={{ padding: 24 }}>
             <Flex vertical gap={16}>
+                {studioHost ? <Typography.Text type="secondary">Studio 账号由 MassMore / Mtline 管理，这里显示最近同步到 Studio 的账号与积分快照；账号资料和余额请回到原站修改。</Typography.Text> : null}
                 <Card variant="borderless">
                     <Form layout="vertical">
                         <Row gutter={16} align="bottom">
@@ -168,7 +179,7 @@ export default function AdminUsersPage() {
                         </Space>
                     }
                     options={{ density: true, setting: true, reload: () => void refreshUsers() }}
-                    toolBarRender={() => [
+                    toolBarRender={() => studioHost ? [] : [
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingUser({ role: "user", status: "active" })}>
                             新增
                         </Button>,
