@@ -22,7 +22,7 @@ export type StudioModel = {
     creditCost: number;
     pricingRules?: Record<string, unknown>;
     provider: string;
-    apiFormat?: LocalModelChannel["protocol"];
+    apiFormat?: string;
     protocolTemplate?: string;
     enabled: boolean;
     rowId?: number;
@@ -35,9 +35,22 @@ export type StudioProvider = {
     id: number;
     name: string;
     base_url: string;
-    api_format: LocalModelChannel["protocol"];
+    api_format: string;
     protocol_template?: string;
     is_async?: number | boolean;
+    create_path?: string;
+    poll_path_template?: string;
+    content_path_template?: string;
+    task_id_field?: string;
+    status_field?: string;
+    result_url_field?: string;
+    completed_statuses?: string[];
+    failed_statuses?: string[];
+    download_result?: number | boolean;
+    auth_mode?: string;
+    auth_header_name?: string;
+    auth_query_name?: string;
+    extra_headers?: Record<string, unknown>;
     enabled: number | boolean;
 };
 
@@ -343,18 +356,31 @@ export async function deleteStudioStoredFile(id: string, provider?: Record<strin
 export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): Partial<AiConfig> {
     const enabled = models.filter((item) => item.enabled);
     const channelsByProvider = new Map<string, LocalModelChannel>();
+    const protocolForTemplate = (template: string, fallback: LocalModelChannel["protocol"]): LocalModelChannel["protocol"] => {
+        const value = template.trim().toLowerCase();
+        if (value.startsWith("gemini")) return "gemini";
+        if (value.startsWith("grok2api")) return "grok2api";
+        if (value.startsWith("mimo")) return "mimo";
+        if (value === "minimax_h3") return "metaso";
+        if (value === "kling_apimart") return "apimart";
+        if (value === "kling_kie") return "kie";
+        return fallback;
+    };
+    const modelProtocolTemplates = Object.fromEntries(enabled.map((item) => [item.model, item.protocolTemplate || "openai"]));
     for (const item of enabled) {
         const provider = item.provider || "Studio";
-        const channel = channelsByProvider.get(provider) || {
+        const protocol = protocolForTemplate(item.protocolTemplate || "", (item.apiFormat as LocalModelChannel["protocol"]) || "openai");
+        const channelKey = `${provider}::${protocol}`;
+        const channel = channelsByProvider.get(channelKey) || {
             id: `studio-${channelsByProvider.size + 1}`,
-            protocol: item.protocolTemplate === "grok2api" ? "grok2api" : item.apiFormat || "openai",
+            protocol,
             name: provider,
             baseUrl: typeof window === "undefined" ? "" : window.location.origin,
             apiKey: "studio-managed",
             models: [],
         };
         if (!channel.models.includes(item.model)) channel.models.push(item.model);
-        channelsByProvider.set(provider, channel);
+        channelsByProvider.set(channelKey, channel);
     }
     const channels = [...channelsByProvider.values()];
     const modelsByCapability = (capability: ModelCapability) => enabled.filter((item) => item.capability === capability).map((item) => item.model);
@@ -378,6 +404,7 @@ export function catalogToConfigPatch(current: AiConfig, models: StudioModel[]): 
         textModels,
         audioModels,
         modelDisplayNames,
+        modelProtocolTemplates,
         modelCosts: enabled.map((item) => ({ model: item.model, credits: Number(item.creditCost || 0) })),
         modelPricingRules: enabled.map((item) => ({ model: item.model, rules: item.pricingRules || {} })),
         imageModel: firstOrCurrent(current.imageModel, imageModels),

@@ -63,6 +63,7 @@ export type AiConfig = {
     textModels: string[];
     audioModels: string[];
     modelDisplayNames: Record<string, string>;
+    modelProtocolTemplates: Record<string, string>;
     modelCosts: Array<{ model: string; credits: number }>;
     modelPricingRules: Array<{ model: string; rules: Record<string, unknown> }>;
     quality: string;
@@ -139,6 +140,7 @@ export const defaultConfig: AiConfig = {
     textModels: [],
     audioModels: [],
     modelDisplayNames: {},
+    modelProtocolTemplates: {},
     modelCosts: [],
     modelPricingRules: [],
     quality: "auto",
@@ -541,6 +543,10 @@ export function channelProtocolForConfig(config: AiConfig): LocalModelChannel["p
         ? config.publicChannels.find((item) => item.id === channelIdForActiveModel(config)) || config.publicChannels[0]
         : localChannelForActiveModel(config);
     return channel?.protocol || "openai";
+}
+
+export function modelProtocolTemplateFor(config: Pick<AiConfig, "modelProtocolTemplates">, model: string) {
+    return config.modelProtocolTemplates?.[model.trim()] || "";
 }
 
 export type DirectAIProvider = "kie" | "apimart";

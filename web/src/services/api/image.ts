@@ -6,7 +6,7 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, modelProtocolTemplateFor, type AiConfig } from "@/stores/use-config-store";
 import { isStudioManagedHost, studioApi } from "@/services/studio-managed";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -191,6 +191,13 @@ function isGrokImageModel(model: string) {
 
 function isGrok2APIImageConfig(config: AiConfig) {
     return channelProtocolForConfig(config) === "grok2api" && isGrokImageModel(config.model);
+}
+
+function configuredImageApiMode(config: AiConfig) {
+    const template = modelProtocolTemplateFor(config, config.model).toLowerCase();
+    if (template === "openai_chat") return "chat";
+    if (template === "openai_responses") return "responses";
+    return config.apiMode;
 }
 
 function isZhipuImageModel(model: string) {
@@ -979,7 +986,8 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
-    const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
+    const apiMode = configuredImageApiMode(config);
+    const useConcurrentSingleRequests = isGeminiConfig(config) || apiMode === "responses" || apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
         const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
@@ -990,8 +998,8 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     if (references.length && isAgnesImageModel(config.model)) {
         return requestAgnesImageEdit(config, prompt, references, params);
     }
-    if (config.apiMode === "chat" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestChatImagesSingle(config, prompt, inputImageDataUrls, params);
-    if (config.apiMode === "responses" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
+    if (apiMode === "chat" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestChatImagesSingle(config, prompt, inputImageDataUrls, params);
+    if (apiMode === "responses" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
 
@@ -1199,7 +1207,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
             body: JSON.stringify({ endpoint: "/images/generations", ...meta, request: body }),
         };
     }
-    if (config.apiMode === "chat" && !isZhipuImageModel(config.model)) {
+    if (configuredImageApiMode(config) === "chat" && !isZhipuImageModel(config.model)) {
         const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
         return {
             method: "POST",
@@ -1207,7 +1215,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
             body: JSON.stringify({ endpoint: "/chat/completions", ...meta, request: createChatImageBody(config, prompt, inputImageDataUrls, params) }),
         };
     }
-    if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) {
+    if (configuredImageApiMode(config) === "responses" && !isZhipuImageModel(config.model)) {
         const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
         const body: Record<string, unknown> = {
             model: config.model,
@@ -1375,7 +1383,7 @@ async function requestGeminiImageSingle(config: AiConfig, prompt: string, refere
         body,
         params.timeoutSeconds,
         () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(
-            proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
+            proxy ? (isStudioManagedHost() ? studioApi(`/v1${references.length ? "/images/edits" : "/images/generations"}`) : `/api/v1${references.length ? "/images/edits" : "/images/generations"}`) : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
             { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal },
         ))),
         async (response) => {
@@ -1448,7 +1456,7 @@ async function requestGeminiText(config: AiConfig, messages: ChatCompletionMessa
     const body = await createGeminiTextBody(config, withSystemMessage(config, messages));
     const proxy = usesAccountProxy(config);
     const channel = localChannelForActiveModel(config);
-    const response = await fetch(proxy ? "/api/v1/chat/completions" : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "streamGenerateContent"), {
+    const response = await fetch(proxy ? (isStudioManagedHost() ? studioApi("/v1/chat/completions") : "/api/v1/chat/completions") : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "streamGenerateContent"), {
         method: "POST",
         headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config),
         body: JSON.stringify(proxy ? body : withoutModel(body)),

@@ -42,7 +42,28 @@ import {
     type StudioWorkflow,
 } from "@/services/studio-managed";
 
-type ProviderFormValues = { name: string; baseUrl: string; apiKey?: string; apiFormat: string; protocolTemplate?: string; isAsync?: boolean; enabled: boolean };
+type ProviderFormValues = {
+    name: string;
+    baseUrl: string;
+    apiKey?: string;
+    apiFormat: string;
+    protocolTemplate?: string;
+    isAsync?: boolean;
+    createPath?: string;
+    pollPathTemplate?: string;
+    contentPathTemplate?: string;
+    taskIdField?: string;
+    statusField?: string;
+    resultUrlField?: string;
+    completedStatuses?: string;
+    failedStatuses?: string;
+    downloadResult?: boolean;
+    authMode?: string;
+    authHeaderName?: string;
+    authQueryName?: string;
+    extraHeaders?: string;
+    enabled: boolean;
+};
 type ModelFormValues = { providerId: number; model: string; displayName: string; capability: "text" | "image" | "video" | "audio"; creditCost: number; enabled: boolean };
 
 const capabilityOptions = [
@@ -50,6 +71,54 @@ const capabilityOptions = [
     { label: "图片", value: "image" },
     { label: "视频", value: "video" },
     { label: "音频", value: "audio" },
+];
+
+const requestFormatOptions = [
+    { value: "openai", label: "OpenAI 兼容" },
+    { value: "gemini", label: "Gemini 原生" },
+    { value: "grok", label: "Grok2API" },
+    { value: "agnes", label: "AGNES" },
+    { value: "minimax", label: "MiniMax" },
+    { value: "mimo", label: "MiMo" },
+    { value: "glm", label: "智谱 GLM" },
+    { value: "seedance", label: "Seedance / Seedream" },
+    { value: "kling", label: "Kling" },
+    { value: "cogvideo", label: "CogVideoX" },
+    { value: "generic_async", label: "通用异步" },
+];
+
+const protocolTemplateOptions = [
+    { value: "openai", label: "OpenAI 图片/通用" },
+    { value: "openai_chat", label: "OpenAI Chat Completions 图片" },
+    { value: "openai_responses", label: "OpenAI Responses 图片" },
+    { value: "openai_images", label: "OpenAI Images 图片生成/编辑" },
+    { value: "openai_video", label: "OpenAI 视频任务" },
+    { value: "openai_tts", label: "OpenAI TTS" },
+    { value: "gemini", label: "Gemini generateContent" },
+    { value: "gemini_image", label: "Gemini 原生图片" },
+    { value: "gemini_video", label: "Gemini 原生视频" },
+    { value: "gemini_tts", label: "Gemini 原生 TTS" },
+    { value: "grok2api", label: "Grok2API 通用" },
+    { value: "grok2api_image", label: "Grok2API 图片生成" },
+    { value: "grok2api_image_edit", label: "Grok2API 图片编辑 JSON" },
+    { value: "grok2api_video", label: "Grok2API 视频" },
+    { value: "grok2api_tts", label: "Grok2API TTS" },
+    { value: "agnes", label: "AGNES 通用" },
+    { value: "agnes_image", label: "AGNES 图片" },
+    { value: "agnes_video", label: "AGNES 视频" },
+    { value: "minimax_h3", label: "MiniMax-H3 视频" },
+    { value: "mimo", label: "MiMo 文本" },
+    { value: "mimo_tts", label: "MiMo TTS" },
+    { value: "glm", label: "智谱 GLM 通用" },
+    { value: "glm_image", label: "智谱 GLM 图片" },
+    { value: "glm_video", label: "智谱 GLM 视频" },
+    { value: "glm_tts", label: "智谱 GLM TTS" },
+    { value: "seedance", label: "Seedance 视频" },
+    { value: "seedream", label: "Seedream 图片" },
+    { value: "kling_apimart", label: "Kling APIMart" },
+    { value: "kling_kie", label: "Kling KIE" },
+    { value: "cogvideo_async", label: "CogVideoX 异步" },
+    { value: "generic_async", label: "通用异步创建/轮询" },
 ];
 
 export default function StudioAdminPage() {
@@ -149,7 +218,27 @@ function StudioAdminContent() {
 
     const beginProviderEdit = (provider: StudioProvider) => {
         setEditingProvider(provider.id);
-        providerForm.setFieldsValue({ name: provider.name, baseUrl: provider.base_url, apiFormat: provider.api_format, protocolTemplate: provider.protocol_template, isAsync: Boolean(provider.is_async), enabled: Boolean(provider.enabled) });
+        providerForm.setFieldsValue({
+            name: provider.name,
+            baseUrl: provider.base_url,
+            apiFormat: provider.api_format,
+            protocolTemplate: provider.protocol_template,
+            isAsync: Boolean(provider.is_async),
+            createPath: provider.create_path,
+            pollPathTemplate: provider.poll_path_template,
+            contentPathTemplate: provider.content_path_template,
+            taskIdField: provider.task_id_field,
+            statusField: provider.status_field,
+            resultUrlField: provider.result_url_field,
+            completedStatuses: provider.completed_statuses?.join(","),
+            failedStatuses: provider.failed_statuses?.join(","),
+            downloadResult: Boolean(provider.download_result),
+            authMode: provider.auth_mode,
+            authHeaderName: provider.auth_header_name,
+            authQueryName: provider.auth_query_name,
+            extraHeaders: JSON.stringify(provider.extra_headers || {}, null, 2),
+            enabled: Boolean(provider.enabled),
+        });
     };
     const beginModelEdit = (model: StudioModel) => {
         setEditingModel(Number(model.rowId || model.id));
@@ -212,9 +301,18 @@ function StudioAdminContent() {
                                     <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
                                     <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, type: "url" }]}><Input /></Form.Item>
                                     <Form.Item name="apiKey" label={editingProvider ? "API Key（留空不修改）" : "API Key"} rules={editingProvider ? [] : [{ required: true }]}><Input.Password /></Form.Item>
-                                    <Form.Item name="apiFormat" label="请求格式" rules={[{ required: true }]}><Select options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini" }, { value: "grok", label: "Grok2API" }]} /></Form.Item>
-                                    <Form.Item name="protocolTemplate" label="协议模板"><Select allowClear options={[{ value: "openai", label: "OpenAI" }, { value: "grok2api", label: "Grok2API" }, { value: "agnes", label: "AGNES" }, { value: "generic_async", label: "通用异步" }]} /></Form.Item>
+                                    <Form.Item name="apiFormat" label="请求格式" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" options={requestFormatOptions} /></Form.Item>
+                                    <Form.Item name="protocolTemplate" label="协议模板" extra="模板会决定画布实际使用的官方请求格式、端点和结果解析方式。"><Select showSearch allowClear optionFilterProp="label" options={protocolTemplateOptions} /></Form.Item>
                                     <Form.Item name="isAsync" label="异步任务" valuePropName="checked"><Switch /></Form.Item>
+                                    <Form.Item name="createPath" label="异步创建路径" extra="例如 /videos 或 /videos/generations；留空使用请求路径"><Input placeholder="/videos" /></Form.Item>
+                                    <Form.Item name="pollPathTemplate" label="轮询路径模板" extra="使用 {task_id} 占位，例如 /videos/{task_id}"><Input placeholder="/videos/{task_id}" /></Form.Item>
+                                    <Form.Item name="contentPathTemplate" label="结果内容路径模板" extra="可选，例如 /videos/{task_id}/content"><Input placeholder="/videos/{task_id}/content" /></Form.Item>
+                                    <Space.Compact block><Form.Item name="taskIdField" label="任务 ID 字段" className="!mb-0 !w-1/3"><Input placeholder="id" /></Form.Item><Form.Item name="statusField" label="状态字段" className="!mb-0 !w-1/3"><Input placeholder="status" /></Form.Item><Form.Item name="resultUrlField" label="结果 URL 字段" className="!mb-0 !w-1/3"><Input placeholder="url" /></Form.Item></Space.Compact>
+                                    <Form.Item name="completedStatuses" label="完成状态" extra="逗号分隔，例如 succeeded,completed,success"><Input /></Form.Item>
+                                    <Form.Item name="failedStatuses" label="失败状态" extra="逗号分隔，例如 failed,error,cancelled"><Input /></Form.Item>
+                                    <Form.Item name="downloadResult" label="由 Studio 下载结果" valuePropName="checked" initialValue><Switch /></Form.Item>
+                                    <Space.Compact block><Form.Item name="authMode" label="鉴权方式" className="!mb-0 !w-1/3"><Select options={[{ value: "bearer", label: "Bearer" }, { value: "header", label: "自定义请求头" }, { value: "query", label: "Query 参数" }]} /></Form.Item><Form.Item name="authHeaderName" label="鉴权请求头" className="!mb-0 !w-1/3"><Input placeholder="Authorization" /></Form.Item><Form.Item name="authQueryName" label="鉴权参数名" className="!mb-0 !w-1/3"><Input placeholder="key" /></Form.Item></Space.Compact>
+                                    <Form.Item name="extraHeaders" label="额外请求头 JSON"><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} placeholder='{"Accept":"application/json"}' /></Form.Item>
                                     <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
                                     <Space><Button type="primary" htmlType="submit">保存</Button><Button onClick={() => { setEditingProvider(null); providerForm.resetFields(); }}>重置</Button></Space>
                                 </Form>

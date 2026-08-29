@@ -118,21 +118,64 @@ _AUTH_RATE_STATE: dict[str, list[float]] = {}
 AUTH_RATE_WINDOW = max(10, int(os.environ.get("STUDIO_AUTH_RATE_WINDOW_SECONDS", "300")))
 AUTH_RATE_MAX_ATTEMPTS = max(3, int(os.environ.get("STUDIO_AUTH_RATE_MAX_ATTEMPTS", "12")))
 
+# Keep the protocol vocabulary explicit.  The frontend already has the
+# request builders for these upstream families; the managed backend must not
+# collapse them into one generic OpenAI request.
+PROTOCOL_TEMPLATES = {
+    "openai": {"api_format": "openai", "label": "OpenAI 图片/通用"},
+    "openai_chat": {"api_format": "openai", "label": "OpenAI Chat Completions 图片"},
+    "openai_responses": {"api_format": "openai", "label": "OpenAI Responses 图片"},
+    "openai_images": {"api_format": "openai", "label": "OpenAI Images 图片生成/编辑"},
+    "openai_video": {"api_format": "openai", "label": "OpenAI 视频任务"},
+    "openai_tts": {"api_format": "openai", "label": "OpenAI TTS"},
+    "gemini": {"api_format": "gemini", "label": "Gemini generateContent"},
+    "gemini_image": {"api_format": "gemini", "label": "Gemini 原生图片"},
+    "gemini_video": {"api_format": "gemini", "label": "Gemini 原生视频"},
+    "gemini_tts": {"api_format": "gemini", "label": "Gemini 原生 TTS"},
+    "grok2api": {"api_format": "grok", "label": "Grok2API 通用"},
+    "grok2api_image": {"api_format": "grok", "label": "Grok2API 图片生成"},
+    "grok2api_image_edit": {"api_format": "grok", "label": "Grok2API 图片编辑 JSON"},
+    "grok2api_video": {"api_format": "grok", "label": "Grok2API 视频"},
+    "grok2api_tts": {"api_format": "grok", "label": "Grok2API TTS"},
+    "agnes": {"api_format": "agnes", "label": "AGNES 通用"},
+    "agnes_image": {"api_format": "agnes", "label": "AGNES 图片"},
+    "agnes_video": {"api_format": "agnes", "label": "AGNES 视频"},
+    "minimax_h3": {"api_format": "minimax", "label": "MiniMax-H3 视频"},
+    "mimo": {"api_format": "mimo", "label": "MiMo 文本"},
+    "mimo_tts": {"api_format": "mimo", "label": "MiMo TTS"},
+    "glm": {"api_format": "glm", "label": "智谱 GLM 通用"},
+    "glm_image": {"api_format": "glm", "label": "智谱 GLM 图片"},
+    "glm_video": {"api_format": "glm", "label": "智谱 GLM 视频"},
+    "glm_tts": {"api_format": "glm", "label": "智谱 GLM TTS"},
+    "seedance": {"api_format": "seedance", "label": "Seedance 视频"},
+    "seedream": {"api_format": "seedance", "label": "Seedream 图片"},
+    "kling_apimart": {"api_format": "kling", "label": "Kling APIMart"},
+    "kling_kie": {"api_format": "kling", "label": "Kling KIE"},
+    "cogvideo_async": {"api_format": "cogvideo", "label": "CogVideoX 异步"},
+    "generic_async": {"api_format": "generic_async", "label": "通用异步创建/轮询"},
+}
+
 PROTOCOL_TEMPLATE_DEFAULTS = {
     "openai": "openai",
-    "sora": "openai",
-    "grok": "openai",
-    "mimo": "openai",
+    "sora": "openai_video",
+    "grok": "grok2api",
+    "mimo": "mimo",
     "gemini": "gemini",
-    "imagen": "gemini",
-    "veo": "gemini",
+    "imagen": "gemini_image",
+    "veo": "gemini_video",
     "omni": "gemini",
     "agnes": "agnes",
-    "seedance": "generic_async",
-    "minimax": "generic_async",
-    "midjourney": "generic_async",
+    "minimax": "minimax_h3",
+    "seedance": "seedance",
+    "seedream": "seedream",
     "kling": "generic_async",
-    "happyhors": "generic_async",
+    "cogvideo": "cogvideo_async",
+    "generic_async": "generic_async",
+}
+
+PROTOCOL_API_FORMATS = {
+    "openai", "gemini", "grok", "agnes", "minimax", "mimo", "glm",
+    "seedance", "kling", "cogvideo", "generic_async",
 }
 
 WORKFLOW_DEFINITIONS = {
@@ -305,6 +348,11 @@ def response_json(response: Any) -> Any:
 def _image_item_from_value(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
+    inline = value.get("inlineData") or value.get("inline_data")
+    if isinstance(inline, dict):
+        encoded = inline.get("data")
+        if isinstance(encoded, str) and encoded.strip():
+            return {"b64_json": encoded.strip()}
     for key in ("b64_json", "b64Json", "base64", "base64_data", "image_base64"):
         encoded = value.get(key)
         if isinstance(encoded, str) and encoded.strip():
@@ -1671,6 +1719,29 @@ def protocol_template_for_api_format(api_format: str) -> str:
     return PROTOCOL_TEMPLATE_DEFAULTS.get(str(api_format or "openai").strip().lower(), "openai")
 
 
+def normalize_protocol_template(value: Any, api_format: str = "openai") -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in PROTOCOL_TEMPLATES:
+        return candidate
+    return protocol_template_for_api_format(api_format)
+
+
+def protocol_api_format(template: str, fallback: str = "openai") -> str:
+    return str(PROTOCOL_TEMPLATES.get(normalize_protocol_template(template, fallback), {}).get("api_format") or fallback).strip().lower()
+
+
+def protocol_default_fields(template: str) -> dict[str, str]:
+    if template in {"generic_async", "cogvideo_async", "seedance", "kling_apimart", "kling_kie", "minimax_h3"}:
+        return {
+            "create_path": "/videos",
+            "poll_path_template": "/videos/{task_id}",
+            "content_path_template": "/videos/{task_id}/content",
+            "completed_statuses": "succeeded,completed,success",
+            "failed_statuses": "failed,error,cancelled,canceled",
+        }
+    return {}
+
+
 def comma_list(value: Any) -> str:
     if isinstance(value, list):
         return ",".join(str(item).strip() for item in value if str(item).strip())
@@ -1685,29 +1756,42 @@ def split_comma_list(value: Any) -> list[str]:
 
 def normalize_provider_protocol_config(payload: dict[str, Any]) -> dict[str, Any]:
     api_format = str(payload.get("api_format") or payload.get("apiFormat") or "openai").strip().lower()
-    protocol_template = str(
+    if api_format not in PROTOCOL_API_FORMATS:
+        api_format = "openai"
+    protocol_template = normalize_protocol_template(
         payload.get("protocol_template")
         or payload.get("protocolTemplate")
-        or protocol_template_for_api_format(api_format)
-    ).strip().lower()
+        or protocol_template_for_api_format(api_format),
+        api_format,
+    )
+    api_format = protocol_api_format(protocol_template, api_format)
+    defaults = protocol_default_fields(protocol_template)
+    extra_headers = payload.get("extra_headers") if "extra_headers" in payload else payload.get("extraHeaders")
+    if isinstance(extra_headers, str):
+        try:
+            extra_headers = json.loads(extra_headers or "{}")
+        except json.JSONDecodeError:
+            extra_headers = {}
+    if not isinstance(extra_headers, dict):
+        extra_headers = {}
     return {
         "base_url": str(payload.get("base_url") or payload.get("baseUrl") or "").strip(),
         "api_format": api_format or "openai",
         "protocol_template": protocol_template or "openai",
         "is_async": int(bool(payload.get("is_async") if "is_async" in payload else payload.get("isAsync", protocol_template in {"openai_async", "generic_async"}))),
-        "create_path": str(payload.get("create_path") or payload.get("createPath") or "").strip(),
-        "poll_path_template": str(payload.get("poll_path_template") or payload.get("pollPathTemplate") or "").strip(),
-        "content_path_template": str(payload.get("content_path_template") or payload.get("contentPathTemplate") or "").strip(),
+        "create_path": str(payload.get("create_path") or payload.get("createPath") or defaults.get("create_path", "")).strip(),
+        "poll_path_template": str(payload.get("poll_path_template") or payload.get("pollPathTemplate") or defaults.get("poll_path_template", "")).strip(),
+        "content_path_template": str(payload.get("content_path_template") or payload.get("contentPathTemplate") or defaults.get("content_path_template", "")).strip(),
         "task_id_field": str(payload.get("task_id_field") or payload.get("taskIdField") or "id").strip() or "id",
         "status_field": str(payload.get("status_field") or payload.get("statusField") or "status").strip() or "status",
         "result_url_field": str(payload.get("result_url_field") or payload.get("resultUrlField") or "url").strip() or "url",
-        "completed_statuses": comma_list(payload.get("completed_statuses") if "completed_statuses" in payload else payload.get("completedStatuses")),
-        "failed_statuses": comma_list(payload.get("failed_statuses") if "failed_statuses" in payload else payload.get("failedStatuses")),
+        "completed_statuses": comma_list(payload.get("completed_statuses") if "completed_statuses" in payload else payload.get("completedStatuses") or defaults.get("completed_statuses", "")),
+        "failed_statuses": comma_list(payload.get("failed_statuses") if "failed_statuses" in payload else payload.get("failedStatuses") or defaults.get("failed_statuses", "")),
         "download_result": int(bool(payload.get("download_result") if "download_result" in payload else payload.get("downloadResult", True))),
         "auth_mode": str(payload.get("auth_mode") or payload.get("authMode") or "bearer").strip().lower() or "bearer",
         "auth_header_name": str(payload.get("auth_header_name") or payload.get("authHeaderName") or "Authorization").strip() or "Authorization",
         "auth_query_name": str(payload.get("auth_query_name") or payload.get("authQueryName") or "key").strip() or "key",
-        "extra_headers": json.dumps(payload.get("extra_headers") or payload.get("extraHeaders") or {}, ensure_ascii=False),
+        "extra_headers": json.dumps(extra_headers, ensure_ascii=False),
     }
 
 
@@ -1793,7 +1877,10 @@ def extract_async_task_fields(provider: dict[str, Any], payload: Any) -> dict[st
 
 
 def uses_generic_async(provider: dict[str, Any]) -> bool:
-    return str(provider.get("protocol_template") or "").strip().lower() == "generic_async" or int(provider.get("is_async") or 0) == 1
+    template = normalize_protocol_template(provider.get("protocol_template"), provider.get("api_format", "openai"))
+    if template in {"generic_async", "cogvideo_async", "seedance", "kling_apimart", "kling_kie", "minimax_h3"}:
+        return True
+    return int(provider.get("is_async") or 0) == 1 and template not in {"openai_video", "gemini_video", "grok2api_video", "agnes_video"}
 
 
 def set_session(payload: dict[str, Any]) -> str:
@@ -2076,7 +2163,7 @@ def list_models(enabled_only: bool = True) -> list[dict[str, Any]]:
     with db() as conn:
         rows = conn.execute(
             f"""
-            select m.*, p.name provider_name, p.api_format
+            select m.*, p.name provider_name, p.api_format, p.protocol_template
             from studio_model_catalog m
             join studio_provider_configs p on p.id=m.provider_id
             {where}
@@ -2103,6 +2190,7 @@ def public_model(row: dict[str, Any]) -> dict[str, Any]:
         "pricingRules": safe_json_object(row.get("pricing_rules") or "{}"),
         "provider": row.get("provider_name", ""),
         "apiFormat": row.get("api_format", "openai"),
+        "protocolTemplate": row.get("protocol_template", protocol_template_for_api_format(row.get("api_format", "openai"))),
         "enabled": bool(row["enabled"]),
         "failoverEnabled": bool(row.get("failover_enabled", 0)),
         "failoverRouteModelIds": safe_json_int_list(row.get("failover_route_model_ids") or "[]"),
@@ -2784,9 +2872,14 @@ def real_model_test(model_id: int) -> dict[str, Any]:
         payload = {"model": model, "prompt": "a calm blue sky", "seconds": 5, "duration": 5}
     else:
         payload = {"model": model, "input": "hi", "voice": "alloy", "response_format": "mp3"}
-    url = build_upstream_url(config, path)
+    url, request_payload, request_files, request_headers = protocol_upstream_request(config, capability, "POST", path, payload)
     started = time.monotonic()
-    response = requests.post(url, json=payload, headers=proxy_headers(config, target_url=url), timeout=min(ASYNC_JOB_TIMEOUT, 120))
+    request_kwargs: dict[str, Any] = {"headers": request_headers, "timeout": min(ASYNC_JOB_TIMEOUT, 120)}
+    if request_files is not None:
+        request_kwargs.update({"data": request_payload, "files": request_files})
+    else:
+        request_kwargs["json"] = request_payload
+    response = requests.post(url, **request_kwargs)
     elapsed = int((time.monotonic() - started) * 1000)
     ok = 200 <= response.status_code < 300
     detail = response.text[:300].replace("\n", " ") if not ok else "HTTP response indicates the model is callable"
@@ -2877,12 +2970,27 @@ def model_config(model: str, capability: str | None = None) -> dict[str, Any]:
 
 
 def infer_capability(path: str, payload: dict[str, Any]) -> str:
-    if "/images/" in path:
+    normalized_path = str(path or "").lower()
+    if "/images/" in normalized_path or normalized_path.endswith("/images"):
         return "image"
-    if "/videos" in path:
+    if "/videos" in normalized_path or "/video" in normalized_path:
         return "video"
-    if "/audio/" in path:
+    if "/audio/" in normalized_path or normalized_path.endswith("/audio"):
         return "audio"
+    # Chat/Responses endpoints are also used by the official image modes.
+    # Prefer the managed catalog when the path itself is ambiguous.
+    model = str(payload.get("model") or "").strip()
+    if model:
+        try:
+            with db() as conn:
+                row = conn.execute(
+                    "select capability from studio_model_catalog where model=? and enabled=1 order by case capability when 'image' then 0 when 'video' then 1 when 'audio' then 2 else 3 end, id asc limit 1",
+                    (model,),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        if row and row["capability"] in {"text", "image", "video", "audio"}:
+            return str(row["capability"])
     return "text"
 
 
@@ -3461,6 +3569,52 @@ def build_upstream_url(config: dict[str, Any], path: str) -> str:
     return with_provider_query_auth(provider_api_base_url(config) + path, config)
 
 
+def gemini_native_url(config: dict[str, Any], model: str, action: str) -> str:
+    base = validate_provider_base_url(config.get("base_url"))
+    base = re.sub(r"/v1beta$|/v1$", "", base, flags=re.IGNORECASE).rstrip("/")
+    normalized_model = str(model).removeprefix("models/")
+    return f"{base}/v1beta/models/{urllib.parse.quote(normalized_model, safe='')}:{action}"
+
+
+def gemini_operation_url(config: dict[str, Any], operation: str) -> str:
+    base = validate_provider_base_url(config.get("base_url"))
+    base = re.sub(r"/v1beta$|/v1$", "", base, flags=re.IGNORECASE).rstrip("/")
+    name = str(operation or "").strip().lstrip("/")
+    if name.lower().startswith("v1beta/"):
+        name = name[7:]
+    return f"{base}/v1beta/{name}"
+
+
+def protocol_upstream_request(config: dict[str, Any], capability: str, method: str, path: str, payload: dict[str, Any], files: list[tuple[str, tuple[str, bytes, str]]] | None = None) -> tuple[str, dict[str, Any], list[tuple[str, tuple[str, bytes, str]]] | None, dict[str, str]]:
+    template = normalize_protocol_template(config.get("protocol_template"), config.get("api_format", "openai"))
+    model = str(config.get("model") or payload.get("model") or "").strip()
+    if template.startswith("gemini"):
+        if method.upper() != "POST":
+            raise StudioError(405, "Gemini operation polling must use its operation URL")
+        action = "predictLongRunning" if capability == "video" else "streamGenerateContent" if payload.get("stream") else "generateContent"
+        native_payload = dict(payload)
+        native_payload.pop("model", None)
+        headers = provider_extra_headers(config)
+        headers.update(internal_origin_headers(gemini_native_url(config, model, action)))
+        if config.get("api_key"):
+            headers["x-goog-api-key"] = str(config["api_key"])
+        headers["Content-Type"] = "application/json"
+        return gemini_native_url(config, model, action), native_payload, None, headers
+    target = build_upstream_url(config, path)
+    return target, {**payload, "model": str(config.get("model") or model)}, files, (proxy_auth_headers(config, target) if files is not None else proxy_headers(config, target_url=target))
+
+
+def protocol_upstream_headers(config: dict[str, Any], target_url: str) -> dict[str, str]:
+    template = normalize_protocol_template(config.get("protocol_template"), config.get("api_format", "openai"))
+    if not template.startswith("gemini"):
+        return proxy_auth_headers(config, target_url)
+    headers = provider_extra_headers(config)
+    headers.update(internal_origin_headers(target_url))
+    if config.get("api_key"):
+        headers["x-goog-api-key"] = str(config["api_key"])
+    return headers
+
+
 def is_failover_retryable(exc: Exception) -> bool:
     if isinstance(exc, StudioError):
         return exc.status in {408, 425, 429, 500, 502, 503, 504, 521, 522, 523, 524}
@@ -3481,17 +3635,17 @@ def upstream_request_with_failover(
     last_error: Exception | None = None
     routes = model_route_configs(model, capability)
     for index, config in enumerate(routes):
-        upstream_url = build_upstream_url(config, path)
         route_payload = dict(payload or {})
         route_payload["model"] = str(config.get("model") or model)
         try:
-            if files is not None:
+            upstream_url, route_payload, route_files, request_headers = protocol_upstream_request(config, capability, method, path, route_payload, files)
+            if route_files is not None:
                 upstream = requests.request(
                     method,
                     upstream_url,
                     data=route_payload,
-                    files=files,
-                    headers=proxy_auth_headers(config, upstream_url),
+                    files=route_files,
+                    headers=request_headers,
                     timeout=timeout,
                     stream=preview_callback is not None,
                 )
@@ -3500,7 +3654,7 @@ def upstream_request_with_failover(
                     method,
                     upstream_url,
                     json=route_payload,
-                    headers=proxy_headers(config, target_url=upstream_url),
+                    headers=request_headers,
                     timeout=timeout,
                     stream=preview_callback is not None,
                 )
@@ -3567,7 +3721,7 @@ def extract_task_id(payload: Any) -> str:
     if isinstance(data, list):
         candidates.extend([item for item in data if isinstance(item, dict)])
     for item in candidates:
-        for key in ("id", "task_id", "video_id"):
+        for key in ("id", "task_id", "video_id", "name"):
             value = item.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -3987,6 +4141,14 @@ class Handler(BaseHTTPRequestHandler):
             config = video_task_config(session, task_id)
             if uses_generic_async(config):
                 self.handle_generic_async_poll(session, config, task_id)
+                return
+            template = normalize_protocol_template(config.get("protocol_template"), config.get("api_format", "openai"))
+            if template.startswith("gemini") and not path.rstrip("/").endswith("/content"):
+                operation_url = gemini_operation_url(config, task_id)
+                upstream = requests.get(operation_url, headers=protocol_upstream_headers(config, operation_url), timeout=REQUEST_TIMEOUT)
+                if upstream.status_code >= 400:
+                    raise StudioError(upstream.status_code, upstream.text[:1000] or upstream.reason)
+                self.forward_response(upstream)
                 return
             if path.rstrip("/").endswith("/content"):
                 self.handle_managed_video_content(session, config, task_id)
@@ -4497,7 +4659,7 @@ class Handler(BaseHTTPRequestHandler):
             with db() as conn:
                 rows = conn.execute(
                     """
-                    select m.*, p.name provider_name, p.api_format
+                    select m.*, p.name provider_name, p.api_format, p.protocol_template
                     from studio_model_catalog m
                     join studio_provider_configs p on p.id=m.provider_id
                     order by m.capability, m.display_name
